@@ -231,20 +231,44 @@ function deferToolFailureCleanupStabilization(omcRoot) {
   }
 }
 
-function hasLegacyToolFailureArtifacts(omcRoot) {
+function legacyToolFailureArtifactSnapshot(omcRoot) {
   const stateDir = join(omcRoot, 'state');
-  if (hasToolFailureArtifacts(stateDir, 'last-tool-error.json')) return true;
-  let sessions;
+  const directories = [[stateDir, 'last-tool-error.json']];
   try {
     const sessionsDir = join(stateDir, 'sessions');
-    sessions = lstatSync(sessionsDir).isDirectory() ? readdirSync(sessionsDir) : [];
+    if (lstatSync(sessionsDir).isDirectory()) {
+      for (const sessionId of readdirSync(sessionsDir)) {
+        directories.push([join(sessionsDir, sessionId), 'last-tool-error-state.json']);
+      }
+    }
   } catch {
-    return false;
+    // The root-level record can still be inspected when sessions are unavailable.
   }
-  return sessions.some(sessionId => hasToolFailureArtifacts(
-    join(stateDir, 'sessions', sessionId),
-    'last-tool-error-state.json',
-  ));
+
+  const artifacts = [];
+  let latestTempCleanupAt = 0;
+  for (const [directory, canonicalFilename] of directories) {
+    let names;
+    try {
+      if (!lstatSync(directory).isDirectory()) continue;
+      names = readdirSync(directory);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (name !== canonicalFilename && name !== `${canonicalFilename}.lock` && !TOOL_FAILURE_TEMP_FILE_PATTERN.test(name)) continue;
+      try {
+        const stat = lstatSync(join(directory, name));
+        artifacts.push(`${directory}\0${name}\0${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`);
+        if (TOOL_FAILURE_TEMP_FILE_PATTERN.test(name)) {
+          latestTempCleanupAt = Math.max(latestTempCleanupAt, stat.mtimeMs + TOOL_FAILURE_TEMP_MIN_AGE_MS);
+        }
+      } catch {
+        // Ignore artifacts concurrently removed or replaced.
+      }
+    }
+  }
+  return { signature: artifacts.sort().join('\n'), latestTempCleanupAt };
 }
 
 function hasActiveOlderPluginRoot() {
@@ -275,6 +299,8 @@ async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
   if (!workerLock) return;
 
   let quietUntil = Date.now() + stabilizationMs;
+  let artifactSnapshot = legacyToolFailureArtifactSnapshot(omcRoot);
+  quietUntil = Math.max(quietUntil, artifactSnapshot.latestTempCleanupAt + 1000);
   let olderPluginActive = hasActiveOlderPluginRoot();
   let nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
   try {
@@ -284,9 +310,13 @@ async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
         olderPluginActive = hasActiveOlderPluginRoot();
         nextPluginRootCheck = now + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
       }
-      const artifactsFound = hasLegacyToolFailureArtifacts(omcRoot);
-      if (now >= quietUntil && !olderPluginActive && !artifactsFound) break;
-      if (olderPluginActive || artifactsFound) quietUntil = now + stabilizationMs;
+      const currentArtifactSnapshot = legacyToolFailureArtifactSnapshot(omcRoot);
+      if (currentArtifactSnapshot.signature !== artifactSnapshot.signature) {
+        artifactSnapshot = currentArtifactSnapshot;
+        quietUntil = now + stabilizationMs;
+      }
+      quietUntil = Math.max(quietUntil, currentArtifactSnapshot.latestTempCleanupAt + 1000);
+      if (now >= quietUntil && !olderPluginActive) break;
       const cleanupPending = await purgeLegacyToolFailureState(omcRoot, POST_TOOL_FAILURE_LOCK_WAIT_MS, false);
       if (cleanupPending) quietUntil = Date.now() + stabilizationMs;
       await new Promise(resolve => setTimeout(resolve, Math.min(

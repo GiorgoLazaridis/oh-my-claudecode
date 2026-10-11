@@ -123,6 +123,15 @@ async function waitForFilesToDisappear(paths: string[], timeoutMs: number) {
   return paths.every(path => !existsSync(path));
 }
 
+async function waitForFilesToAppear(paths: string[], timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (paths.every(path => existsSync(path))) return true;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return paths.every(path => existsSync(path));
+}
+
 describe('session-start.mjs regression #1386', () => {
   let tempDir: string;
   let fakeHome: string;
@@ -381,6 +390,7 @@ describe('session-start.mjs regression #1386', () => {
   it('does not classify unverifiable failure-state locks as retryable contention', async () => {
     const stateDir = join(fakeProject, '.omc', 'state');
     const legacyPath = join(stateDir, 'last-tool-error.json');
+    const workerLockPath = join(stateDir, '.legacy-tool-failure-cleanup-worker.lock');
     writeFileSync(legacyPath, JSON.stringify({ tool_input_preview: 'unverifiable legacy secret' }));
     writeFileSync(`${legacyPath}.lock`, 'malformed lock metadata');
 
@@ -388,11 +398,18 @@ describe('session-start.mjs regression #1386', () => {
       hook_event_name: 'SessionStart',
       session_id: 'session-current',
       cwd: fakeProject,
-    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '', OMC_HOOK_BACKGROUND_CHILD: '1' }).output);
+    }, {
+      CLAUDE_PLUGIN_ROOT: '',
+      OMC_STATE_DIR: '',
+      OMC_HOOK_BACKGROUND_CHILD: '0',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+    }).output);
 
     expect(output.continue).toBe(true);
     expect(existsSync(legacyPath)).toBe(true);
     expect(readFileSync(`${legacyPath}.lock`, 'utf-8')).toBe('malformed lock metadata');
+    expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+    expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
   });
 
   it('rescans root and newly created session records after the startup snapshot', async () => {
