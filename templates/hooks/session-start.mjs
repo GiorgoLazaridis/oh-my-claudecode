@@ -210,10 +210,10 @@ function hasToolFailureArtifacts(directory, canonicalFilename) {
   }
 }
 
-async function purgeToolFailureStateDirectory(directory, canonicalFilename, deadline) {
+async function purgeToolFailureStateDirectory(directory, canonicalFilename) {
   if (!hasToolFailureArtifacts(directory, canonicalFilename)) return;
   const canonicalPath = join(directory, canonicalFilename);
-  const postToolFailureLock = await waitForPostToolFailureLock(canonicalPath, deadline);
+  const postToolFailureLock = await waitForPostToolFailureLock(canonicalPath, Date.now() + POST_TOOL_FAILURE_LOCK_WAIT_MS);
   if (!postToolFailureLock) return;
   try {
     purgeLegacyToolFailureFile(canonicalPath);
@@ -231,23 +231,20 @@ async function purgeLegacyToolFailureState(omcRoot) {
     return;
   }
 
-  const deadline = Date.now() + POST_TOOL_FAILURE_LOCK_WAIT_MS;
-  await purgeToolFailureStateDirectory(stateDir, 'last-tool-error.json', deadline);
-
+  await purgeToolFailureStateDirectory(stateDir, 'last-tool-error.json');
   const sessionsDir = join(stateDir, 'sessions');
   let sessions;
   try {
-    if (!lstatSync(sessionsDir).isDirectory()) return;
-    sessions = readdirSync(sessionsDir);
+    sessions = lstatSync(sessionsDir).isDirectory() ? readdirSync(sessionsDir) : [];
   } catch {
-    return;
+    sessions = [];
   }
 
   for (const sessionId of sessions) {
     const sessionDir = join(sessionsDir, sessionId);
     try {
       if (!lstatSync(sessionDir).isDirectory()) continue;
-      await purgeToolFailureStateDirectory(sessionDir, 'last-tool-error-state.json', deadline);
+      await purgeToolFailureStateDirectory(sessionDir, 'last-tool-error-state.json');
     } catch {
       // Skip inaccessible or replaced session directories.
     }

@@ -291,6 +291,42 @@ describe('session-start template retired-state handling', () => {
     }
   });
 
+  it('gives session-state cleanup its own retry window after a locked root state', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const sessionDir = join(stateDir, 'sessions', 'session-locked');
+    mkdirSync(sessionDir, { recursive: true });
+    const rootHolder = startPostToolFailureLockHolder(join(stateDir, 'last-tool-error.json'));
+    const sessionHolder = startPostToolFailureLockHolder(join(sessionDir, 'last-tool-error-state.json'));
+    const sessionTemp = join(sessionDir, `.last-tool-error-state.json.tmp.${randomUUID()}`);
+    let sessionStart: ReturnType<typeof startSessionStartProcess> | undefined;
+
+    try {
+      await Promise.all([rootHolder.ready, sessionHolder.ready]);
+      sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+        hook_event_name: 'SessionStart',
+        session_id: 'session-current',
+        cwd: fakeProject,
+      }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+      await new Promise(resolve => setTimeout(resolve, 250));
+      writeFileSync(sessionTemp, '{"tool_input_preview":"session legacy payload"');
+
+      await new Promise(resolve => setTimeout(resolve, 2600));
+      expect(sessionStart.child.exitCode).toBe(null);
+      expect(existsSync(sessionTemp)).toBe(true);
+      expect(await rootHolder.release()).toEqual({ code: 0, signal: null });
+      await new Promise(resolve => setTimeout(resolve, 250));
+      expect(sessionStart.child.exitCode).toBe(null);
+      expect(await sessionHolder.release()).toEqual({ code: 0, signal: null });
+
+      const output = JSON.parse(await sessionStart.output);
+      expect(output.continue).toBe(true);
+      expect(existsSync(sessionTemp)).toBe(false);
+    } finally {
+      await Promise.all([rootHolder.release(), sessionHolder.release()]);
+      if (sessionStart) await sessionStart.output.catch(() => '');
+    }
+  });
+
   it('purges legacy tool-failure state from the home root on no-workspace startup', () => {
     const homeStateDir = join(fakeHome, '.omc', 'state');
     const homeSessionDir = join(homeStateDir, 'sessions', 'session-old-home');
