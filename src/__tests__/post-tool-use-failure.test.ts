@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
@@ -172,6 +172,28 @@ describe('post-tool-use-failure.mjs', () => {
     expect(state.error).toBe('Tool execution failed (details omitted for privacy).');
     expect(Number.isFinite(Date.parse(state.timestamp))).toBe(true);
     expect(state.retry_count).toBe(2);
+  });
+
+  it.each([
+    ['plugin script', SCRIPT_PATH],
+    ['installer template', TEMPLATE_SCRIPT_PATH],
+  ])('does not write failure state without the exclusive lock (%s)', (_surface, scriptPath) => {
+    const cwd = makeRepoLocalTempDir();
+    const stateDir = join(cwd, '.omc', 'state');
+    const errorPath = join(stateDir, 'last-tool-error.json');
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(`${errorPath}.lock`, JSON.stringify({ pid: process.pid, timestamp: Date.now() }));
+
+    const result = runHook({
+      tool_name: 'Bash',
+      tool_input: { command: 'false' },
+      error: 'exit code 1',
+      cwd,
+    }, undefined, scriptPath);
+
+    expect(result.continue).toBe(true);
+    expect(existsSync(errorPath)).toBe(false);
+    expect(existsSync(`${errorPath}.lock`)).toBe(true);
   });
 
   it('suppresses broad AGENTS scan permission-denied noise for Bash', () => {

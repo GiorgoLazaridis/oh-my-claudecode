@@ -352,16 +352,36 @@ describe('atomicWriteJson', () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
-  it('eventually reclaims a legacy lock after its finite age limit', () => {
+  it('reclaims a legacy lock when its PID now belongs to a later process', () => {
     const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-legacy-'));
     directories.push(directory);
     process.env.NODE_ENV = 'test';
     process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
     const lockPath = join(directory, 'last-tool-error.json.lock');
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, timestamp: Date.now() - 31_000 }));
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, timestamp: 1 }));
 
     expect(withStateFileLockAtPathSync(lockPath, () => 'written')).toEqual({ acquired: true, value: 'written' });
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('keeps a live legacy owner lock after thirty seconds', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-legacy-live-'));
+    directories.push(directory);
+    process.env.NODE_ENV = 'test';
+    process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
+    const lockPath = join(directory, 'last-tool-error.json.lock');
+    const timestamp = Date.now() + 1000;
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, timestamp }));
+    vi.useFakeTimers();
+    vi.setSystemTime(timestamp + 31_000);
+
+    try {
+      expect(withStateFileLockAtPathSync(lockPath, () => 'must not run', false, 1)).toEqual({ acquired: false, value: undefined });
+      expect(getStateFileLockFailureKind()).toBe('contention');
+      expect(existsSync(lockPath)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports malformed exact-path lock metadata as unverifiable', () => {

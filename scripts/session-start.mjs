@@ -131,6 +131,10 @@ const POST_TOOL_FAILURE_LOCK_WAIT_MS = 2500;
 const POST_TOOL_FAILURE_DEFERRED_WAIT_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_RETRY_MS = 50;
 const DEFERRED_TOOL_FAILURE_CLEANUP_FLAG = '--purge-legacy-tool-failure-state';
+const STABILIZE_TOOL_FAILURE_CLEANUP_FLAG = '--stabilize-legacy-tool-failure-state';
+const TOOL_FAILURE_CLEANUP_STABILIZATION_MS = 30_000;
+const TOOL_FAILURE_CLEANUP_RESCAN_MS = 250;
+const TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS = 5000;
 let postToolFailureStateLockModule;
 
 async function loadPostToolFailureStateLock() {
@@ -202,6 +206,105 @@ function deferLegacyToolFailureCleanup(omcRoot, waitMs = POST_TOOL_FAILURE_DEFER
   }
 }
 
+function toolFailureCleanupStabilizationMs() {
+  if (process.env.NODE_ENV === 'test') {
+    const testWindow = Number(process.env.OMC_TEST_TOOL_FAILURE_STABILIZATION_MS);
+    if (Number.isFinite(testWindow) && testWindow > 0) return Math.min(testWindow, 5000);
+  }
+  return TOOL_FAILURE_CLEANUP_STABILIZATION_MS;
+}
+
+function shouldStabilizeToolFailureCleanup() {
+  if (process.env.NODE_ENV === 'test') {
+    return Number(process.env.OMC_TEST_TOOL_FAILURE_STABILIZATION_MS) > 0;
+  }
+  return true;
+}
+
+function deferToolFailureCleanupStabilization(omcRoot) {
+  if (!shouldStabilizeToolFailureCleanup() || process.env.OMC_HOOK_BACKGROUND_CHILD === '1') return;
+  try {
+    const child = spawn(process.execPath, [__filename, STABILIZE_TOOL_FAILURE_CLEANUP_FLAG, omcRoot, String(toolFailureCleanupStabilizationMs())], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, OMC_HOOK_BACKGROUND_CHILD: '1' },
+    });
+    child.on('error', () => {});
+    child.unref();
+  } catch {
+    // Stabilization is best-effort and must not delay SessionStart output.
+  }
+}
+
+function hasLegacyToolFailureArtifacts(omcRoot) {
+  const stateDir = join(omcRoot, 'state');
+  if (hasToolFailureArtifacts(stateDir, 'last-tool-error.json')) return true;
+  let sessions;
+  try {
+    const sessionsDir = join(stateDir, 'sessions');
+    sessions = lstatSync(sessionsDir).isDirectory() ? readdirSync(sessionsDir) : [];
+  } catch {
+    return false;
+  }
+  return sessions.some(sessionId => hasToolFailureArtifacts(
+    join(stateDir, 'sessions', sessionId),
+    'last-tool-error-state.json',
+  ));
+}
+
+function hasActiveOlderPluginRoot() {
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  if (!pluginRoot) return false;
+  try {
+    const currentRoot = pathIdentity(pluginRoot);
+    const pluginVersionsDirectory = dirname(currentRoot);
+    const { roots } = readOccupiedPluginRoots(configDir);
+    return [...roots].some(root => root !== currentRoot && dirname(root) === pluginVersionsDirectory);
+  } catch {
+    return false;
+  }
+}
+
+async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
+  const stateDir = join(omcRoot, 'state');
+  try {
+    if (!lstatSync(stateDir).isDirectory()) return;
+  } catch {
+    return;
+  }
+
+  const stateLock = await loadPostToolFailureStateLock();
+  const workerLock = stateLock.acquireStateFileLockAtPathSync(
+    join(stateDir, '.legacy-tool-failure-cleanup-worker.lock'), 300, true,
+  );
+  if (!workerLock) return;
+
+  let quietUntil = Date.now() + stabilizationMs;
+  let olderPluginActive = hasActiveOlderPluginRoot();
+  let nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
+  try {
+    while (true) {
+      const now = Date.now();
+      if (now >= nextPluginRootCheck) {
+        olderPluginActive = hasActiveOlderPluginRoot();
+        nextPluginRootCheck = now + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
+      }
+      const artifactsFound = hasLegacyToolFailureArtifacts(omcRoot);
+      if (now >= quietUntil && !olderPluginActive && !artifactsFound) break;
+      if (olderPluginActive || artifactsFound) quietUntil = now + stabilizationMs;
+      const cleanupPending = await purgeLegacyToolFailureState(omcRoot, POST_TOOL_FAILURE_LOCK_WAIT_MS, false);
+      if (cleanupPending) quietUntil = Date.now() + stabilizationMs;
+      await new Promise(resolve => setTimeout(resolve, Math.min(
+        TOOL_FAILURE_CLEANUP_RESCAN_MS,
+        Math.max(1, quietUntil - Date.now()),
+      )));
+    }
+  } finally {
+    stateLock.releaseStateFileLockSync(workerLock);
+  }
+}
+
 async function purgeLegacyToolFailureState(omcRoot, waitMs = POST_TOOL_FAILURE_LOCK_WAIT_MS, deferOnTimeout = true) {
   const deadline = Date.now() + waitMs;
   const stateDir = join(omcRoot, 'state');
@@ -232,7 +335,9 @@ async function purgeLegacyToolFailureState(omcRoot, waitMs = POST_TOOL_FAILURE_L
   const cleanupPending = (await Promise.all(
     directories.map(([directory, filename]) => purgeToolFailureStateDirectory(directory, filename, deadline)),
   )).some(Boolean);
-  if (cleanupPending && deferOnTimeout) deferLegacyToolFailureCleanup(omcRoot, POST_TOOL_FAILURE_DEFERRED_WAIT_MS);
+  if (cleanupPending && deferOnTimeout && !shouldStabilizeToolFailureCleanup()) {
+    deferLegacyToolFailureCleanup(omcRoot, POST_TOOL_FAILURE_DEFERRED_WAIT_MS);
+  }
   return cleanupPending;
 }
 
@@ -1237,6 +1342,7 @@ async function main() {
           ? resolve(process.env.OMC_STATE_DIR, 'non-git')
           : join(homedir(), '.omc');
         await purgeLegacyToolFailureState(unscopedOmcRoot);
+        deferToolFailureCleanupStabilization(unscopedOmcRoot);
       } catch {
         // Legacy-state cleanup is best-effort on the no-workspace fast path.
       }
@@ -1247,6 +1353,7 @@ async function main() {
     const sessionId = data.session_id || data.sessionId || '';
     const omcRoot = await resolveOmcStateRoot(directory);
     await purgeLegacyToolFailureState(omcRoot);
+    deferToolFailureCleanupStabilization(omcRoot);
     let messages = [];
     const userMessages = [];
     let pendingRestore = null;
@@ -1687,6 +1794,18 @@ if (process.argv.includes(REFRESH_UPDATE_CACHE_FLAG)) {
     ? Math.min(requestedWaitMs, POST_TOOL_FAILURE_DEFERRED_WAIT_MS)
     : POST_TOOL_FAILURE_DEFERRED_WAIT_MS;
   purgeLegacyToolFailureState(omcRoot, waitMs)
+    .catch(() => {})
+    .finally(() => process.exit(0));
+} else if (process.argv[2] === STABILIZE_TOOL_FAILURE_CLEANUP_FLAG) {
+  const omcRoot = process.argv[3];
+  if (!omcRoot) {
+    process.exit(0);
+  }
+  const requestedWindow = Number(process.argv[4]);
+  const stabilizationMs = Number.isFinite(requestedWindow) && requestedWindow > 0
+    ? Math.min(requestedWindow, TOOL_FAILURE_CLEANUP_STABILIZATION_MS)
+    : TOOL_FAILURE_CLEANUP_STABILIZATION_MS;
+  stabilizeLegacyToolFailureState(omcRoot, stabilizationMs)
     .catch(() => {})
     .finally(() => process.exit(0));
 } else {

@@ -37,7 +37,8 @@ try {
 const localLocks = new Map();
 const recoveryLocks = new Map();
 // Pre-upgrade PostToolUseFailure locks contain only a PID and timestamp.
-const LEGACY_FILE_LOCK_STALE_MS = 30_000;
+const LEGACY_PROCESS_START_TOLERANCE_MS = 2000;
+let linuxClockTicksPerSecond;
 let ownIdentityCache = null;
 let lastLockFailure = null;
 let lastLockFailureDetail = null;
@@ -143,16 +144,54 @@ function readOwner(path) {
 
 function ownerLive(owner) {
   if (owner.version === 0) {
-    if (Date.now() - owner.timestamp >= LEGACY_FILE_LOCK_STALE_MS) return false;
-    try {
-      process.kill(owner.pid, 0);
-      return true;
-    } catch (error) {
-      return error?.code === 'ESRCH' ? false : error?.code === 'EPERM' ? true : null;
-    }
+    const identity = processStartIdentity(owner.pid);
+    if (identity === 'absent') return false;
+    if (identity === null) return null;
+    const startedAt = processStartTimestamp(owner.pid, identity);
+    return startedAt === null ? null : startedAt <= owner.timestamp + LEGACY_PROCESS_START_TOLERANCE_MS;
   }
   const current = processStartIdentity(owner.pid);
   return current === null ? null : current === 'absent' ? false : current === owner.processStart;
+}
+
+function processStartTimestamp(pid, expectedIdentity) {
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const end = stat.lastIndexOf(')');
+      const fields = end < 0 ? [] : stat.slice(end + 2).trim().split(/\s+/);
+      const startTicks = fields[19];
+      if (!startTicks || startTicks !== expectedIdentity) return null;
+      const bootSeconds = readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)$/m)?.[1];
+      if (!bootSeconds) return null;
+      if (linuxClockTicksPerSecond === undefined) {
+        const result = spawnSync('getconf', ['CLK_TCK'], {
+          encoding: 'utf8', timeout: 250, windowsHide: true,
+          env: { ...process.env, LC_ALL: 'C' },
+        });
+        const ticks = result.status === 0 ? Number(result.stdout.trim()) : NaN;
+        linuxClockTicksPerSecond = Number.isSafeInteger(ticks) && ticks > 0 ? ticks : null;
+      }
+      if (linuxClockTicksPerSecond === null) return null;
+      return Number(bootSeconds) * 1000 + Number(startTicks) * 1000 / linuxClockTicksPerSecond;
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === 'darwin') {
+    const startedAt = Number(expectedIdentity);
+    return Number.isFinite(startedAt) ? startedAt : null;
+  }
+  if (process.platform === 'win32') {
+    const ticks = expectedIdentity.match(/^ticks:(\d+)$/)?.[1];
+    if (!ticks) return null;
+    try {
+      return Number((BigInt(ticks) - 116444736000000000n) / 10000n);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function sameOwner(left, right) {
@@ -612,12 +651,12 @@ export function releaseStateFileLockSync(lock) {
   }
 }
 
-export function withStateFileLockSync(filePath, callback, requireExclusive = false) {
-  return withStateFileLockAtPathSync(`${filePath}.mutation.lock`, callback, requireExclusive);
+export function withStateFileLockSync(filePath, callback, requireExclusive = false, attempts = 50) {
+  return withStateFileLockAtPathSync(`${filePath}.mutation.lock`, callback, requireExclusive, attempts);
 }
 
-export function withStateFileLockAtPathSync(lockPath, callback, requireExclusive = false) {
-  const lock = acquireStateFileLockAtPathSync(lockPath, 50, requireExclusive);
+export function withStateFileLockAtPathSync(lockPath, callback, requireExclusive = false, attempts = 50) {
+  const lock = acquireStateFileLockAtPathSync(lockPath, attempts, requireExclusive);
   if (!lock) return { acquired: false, value: undefined };
   let value;
   let releaseFailed = false;

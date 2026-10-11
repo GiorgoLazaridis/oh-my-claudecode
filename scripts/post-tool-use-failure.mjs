@@ -61,8 +61,8 @@ function validateSessionId(sessionId) {
 
 // Use the same process-identity-aware state lock as the cleanup hook.
 function withFileLockSync(filePath, fn) {
-  const result = withStateFileLockAtPathSync(`${filePath}.lock`, fn, true);
-  if (!result.acquired && !result.callbackRan) fn();
+  const result = withStateFileLockAtPathSync(`${filePath}.lock`, fn, true, 200);
+  return result.acquired || result.callbackRan;
 }
 
 // ============================================================================
@@ -315,7 +315,7 @@ async function main() {
     let retryCount = 1;
 
     // Read-compute-write under lock to prevent concurrent retryCount corruption
-    withFileLockSync(statePath, () => {
+    const stateWriteCompleted = withFileLockSync(statePath, () => {
       // Read existing state and calculate retry count
       const existingState = readErrorState(statePath);
       const currentTime = Date.now();
@@ -324,6 +324,9 @@ async function main() {
       // Write error state
       writeErrorState(stateDir, toolName, retryCount, statePath);
     });
+    if (!stateWriteCompleted) {
+      console.error('[omc-tool-failure] state write skipped because the exclusive lock was unavailable');
+    }
 
     // Inject continuation guidance so the model analyzes the error instead of stopping.
     // Without this, PostToolUseFailure returns silently and the model may end its turn.

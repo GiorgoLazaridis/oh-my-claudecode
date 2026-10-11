@@ -395,6 +395,37 @@ describe('session-start.mjs regression #1386', () => {
     expect(readFileSync(`${legacyPath}.lock`, 'utf-8')).toBe('malformed lock metadata');
   });
 
+  it('rescans root and newly created session records after the startup snapshot', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const rootPath = join(stateDir, 'last-tool-error.json');
+    const lateSessionDir = join(stateDir, 'sessions', 'session-created-after-start');
+    const lateSessionPath = join(lateSessionDir, 'last-tool-error-state.json');
+    const workerLockPath = join(stateDir, '.legacy-tool-failure-cleanup-worker.lock');
+    const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, {
+      CLAUDE_PLUGIN_ROOT: '',
+      OMC_STATE_DIR: '',
+      OMC_HOOK_BACKGROUND_CHILD: '0',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '1500',
+    });
+
+    try {
+      expect(JSON.parse(await sessionStart.output).continue).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      mkdirSync(lateSessionDir, { recursive: true });
+      writeFileSync(rootPath, JSON.stringify({ tool_input_preview: 'late root legacy secret' }));
+      writeFileSync(lateSessionPath, JSON.stringify({ tool_input_preview: 'late session legacy secret' }));
+
+      expect(await waitForFilesToDisappear([rootPath, lateSessionPath], 5000)).toBe(true);
+      expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
+    } finally {
+      await sessionStart.output.catch(() => '');
+    }
+  });
+
   it('retries deferred cleanup after its own lock wait expires', async () => {
     const stateDir = join(fakeProject, '.omc', 'state');
     const legacyPath = join(stateDir, 'last-tool-error.json');
