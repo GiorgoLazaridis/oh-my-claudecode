@@ -463,6 +463,45 @@ describe('atomicWriteJson', () => {
     expect(JSON.parse(output).elapsedMs).toBeLessThan(500);
   });
 
+  it.skipIf(process.platform !== 'linux')('shares one deadline across Windows lock-owner probes', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-shared-probe-deadline-'));
+    directories.push(directory);
+    const powershell = join(directory, 'powershell');
+    const probeCountPath = join(directory, 'probe-count');
+    const lockPath = join(directory, 'last-tool-error.json.lock');
+    const stateLockUrl = pathToFileURL(join(__dirname, '..', '..', '..', 'scripts', 'lib', 'state-lock.mjs')).href;
+    writeFileSync(powershell, `#!/bin/sh\nprintf x >> '${probeCountPath}'\n/usr/bin/sleep 0.25\nprintf '638933184000000001\\n'\n`);
+    chmodSync(powershell, 0o755);
+    writeFileSync(lockPath, JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      processStart: 'ticks:638933184000000001',
+      createdAt: new Date().toISOString(),
+      nonce: '123e4567-e89b-12d3-a456-426614174000',
+    }));
+    const script = `
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      process.env.NODE_ENV = 'test';
+      process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
+      const { acquireStateFileLockAtPathSync, getStateFileLockFailureKind } = await import(process.argv[1]);
+      const startedAt = Date.now();
+      const lock = acquireStateFileLockAtPathSync(process.argv[2], 1, true, false, 300, 300);
+      process.stdout.write(JSON.stringify({ lockAcquired: Boolean(lock), failure: getStateFileLockFailureKind(), elapsedMs: Date.now() - startedAt }));
+    `;
+
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', script, stateLockUrl, lockPath], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_ENV: 'test', PATH: directory },
+      timeout: 1500,
+    });
+    const result = JSON.parse(output) as { lockAcquired: boolean; failure: string; elapsedMs: number };
+
+    expect(result.lockAcquired).toBe(false);
+    expect(result.failure).toBe('unverifiable');
+    expect(readFileSync(probeCountPath, 'utf8')).toHaveLength(2);
+    expect(result.elapsedMs).toBeLessThan(450);
+  });
+
   it('bounds SQLite lock contention by the caller-provided busy timeout', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-sqlite-timeout-'));
     directories.push(directory);

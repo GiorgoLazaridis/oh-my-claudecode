@@ -73,6 +73,7 @@ export function processStartIdentity(pid, timeoutMs = 3000) {
     }
   }
   if (process.platform === 'darwin') {
+    if (timeoutMs <= 0) return null;
     try {
       const result = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], {
         encoding: 'utf8', timeout: Math.max(1, Math.min(2000, Math.floor(timeoutMs))), env: { ...process.env, LC_ALL: 'C' },
@@ -84,6 +85,7 @@ export function processStartIdentity(pid, timeoutMs = 3000) {
     } catch {}
   }
   if (process.platform === 'win32') {
+    if (timeoutMs <= 0) return null;
     try {
       const result = spawnSync('powershell', [
         '-NoProfile', '-NonInteractive', '-Command',
@@ -389,12 +391,21 @@ export function isExclusiveStateLockingAvailable() {
   return override !== null ? override : true;
 }
 
-function acquireFileLock(lockPath, attempts, processProbeTimeoutMs = 3000) {
+function remainingProcessProbeMs(deadline) {
+  return Math.max(0, deadline - Date.now());
+}
+
+function processProbeDeadlineAfter(timeoutMs) {
+  const durationMs = Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : 3000;
+  return Date.now() + durationMs;
+}
+
+function acquireFileLock(lockPath, attempts, processProbeDeadline) {
   // This publication is also checked by SQLite contenders, so mixed backend
   // processes still serialize on one exact owner artifact.
   lastLockFailureDetail = null;
   const key = canonicalKey(lockPath);
-  const processStart = ownProcessStartIdentity(processProbeTimeoutMs);
+  const processStart = ownProcessStartIdentity(remainingProcessProbeMs(processProbeDeadline));
   if (!processStart || processStart === 'absent') {
     recordFailure('unverifiable');
     return null;
@@ -446,7 +457,7 @@ function acquireFileLock(lockPath, attempts, processProbeTimeoutMs = 3000) {
       // Re-verify the identity hasn't changed before probing liveness.
       const recheck = ownerArtifactIdentity(lockPath);
       if (!recheck || !sameArtifactIdentity(recheck, identity)) continue;
-      const live = ownerLive(existing, processProbeTimeoutMs);
+      const live = ownerLive(existing, remainingProcessProbeMs(processProbeDeadline));
       if (live === null) {
         recordFailure('unverifiable');
         return null;
@@ -475,6 +486,17 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
 }
 
 export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireExclusive = false, bypassTestOverride = false, busyTimeoutMs = 2000, processProbeTimeoutMs = 3000) {
+  return acquireStateFileLockAtPathWithDeadline(
+    lockPath,
+    attempts,
+    requireExclusive,
+    bypassTestOverride,
+    busyTimeoutMs,
+    processProbeDeadlineAfter(processProbeTimeoutMs),
+  );
+}
+
+function acquireStateFileLockAtPathWithDeadline(lockPath, attempts, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeDeadline) {
   lastLockFailureDetail = null;
   lastLockFailure = null;
   void requireExclusive;
@@ -485,35 +507,44 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
     held.depth += 1;
     return held;
   }
+  const retryAcquisition = () => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    return acquireStateFileLockAtPathWithDeadline(
+      lockPath,
+      attempts - 1,
+      requireExclusive,
+      bypassTestOverride,
+      busyTimeoutMs,
+      processProbeDeadline,
+    );
+  };
 
   if (!bypassTestOverride && stateFileLockingTestOverride() === false) {
     if (process.env.OMC_TEST_BETTER_SQLITE3_LOAD_FAILURE === '1') {
       sqliteBindingLoadError = nativeBindingDiagnostic('simulated native binding load failure');
     }
-    return acquireFileLock(lockPath, attempts, processProbeTimeoutMs);
+    return acquireFileLock(lockPath, attempts, processProbeDeadline);
   }
 
   const db = openMutationDb(lockPath, bypassTestOverride, busyTimeoutMs);
   if (!db) {
     if (lastLockFailure === 'contention') return null;
-    if (sqliteBindingLoadError) return acquireFileLock(lockPath, attempts, processProbeTimeoutMs);
+    if (sqliteBindingLoadError) return acquireFileLock(lockPath, attempts, processProbeDeadline);
     if (attempts <= 1) {
       recordFailure('unverifiable');
       return null;
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeTimeoutMs);
+    return retryAcquisition();
   }
 
-  const processStart = ownProcessStartIdentity(processProbeTimeoutMs);
+  const processStart = ownProcessStartIdentity(remainingProcessProbeMs(processProbeDeadline));
   if (!processStart || processStart === 'absent') {
     try { db.close(); } catch {}
     if (attempts <= 1) {
       recordFailure('unverifiable');
       return null;
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeTimeoutMs);
+    return retryAcquisition();
   }
 
   const owner = {
@@ -534,7 +565,7 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
         recordFailure('unverifiable');
         return null;
       }
-      const live = ownerLive({ pid: row.pid, processStart: row.process_start }, processProbeTimeoutMs);
+      const live = ownerLive({ pid: row.pid, processStart: row.process_start }, remainingProcessProbeMs(processProbeDeadline));
       if (live === null || live) {
         db.exec('ROLLBACK');
         db.close();
@@ -542,8 +573,7 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
           recordFailure(live === null ? 'unverifiable' : 'contention');
           return null;
         }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-        return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeTimeoutMs);
+        return retryAcquisition();
       }
       db.prepare('DELETE FROM state_mutation_locks WHERE lock_key = ?').run(key);
     }
@@ -557,7 +587,7 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
         console.error(`[omc-lock] state_mutation_lock_unverifiable: ${lockPath}`);
         return null;
       }
-      const live = ownerLive(artifact, processProbeTimeoutMs);
+      const live = ownerLive(artifact, remainingProcessProbeMs(processProbeDeadline));
       if (live === null || live) {
         db.exec('ROLLBACK');
         db.close();
@@ -565,8 +595,7 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
           recordFailure(live === null ? 'unverifiable' : 'contention');
           return null;
         }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-        return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeTimeoutMs);
+        return retryAcquisition();
       }
       const identity = ownerArtifactIdentity(lockPath);
       if (!identity) {
@@ -580,8 +609,7 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
         db.exec('ROLLBACK');
         db.close();
         if (reclaimed === 'changed' && attempts > 1) {
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-          return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeTimeoutMs);
+          return retryAcquisition();
         }
         recordFailure(reclaimed === 'changed' ? 'contention' : 'unverifiable');
         return null;
@@ -596,8 +624,7 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
         recordFailure('contention');
         return null;
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-      return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeTimeoutMs);
+      return retryAcquisition();
     }
     db.exec('COMMIT');
     const lock = { backend: 'sqlite', db, key, path: lockPath, owner, depth: 1 };
@@ -609,8 +636,7 @@ export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireE
     try { db.close(); } catch {}
     if (isNativeBindingError(error)) sqliteBindingLoadError = nativeBindingDiagnostic(errorMessage(error));
     if (retry(error?.code) && attempts > 1) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-      return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride, busyTimeoutMs, processProbeTimeoutMs);
+      return retryAcquisition();
     }
     recordFailure(error?.code === 'SQLITE_BUSY' || error?.code === 'SQLITE_LOCKED' ? 'contention' : 'unverifiable');
     return null;
