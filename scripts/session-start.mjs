@@ -55,6 +55,44 @@ function readJsonFile(path) {
   }
 }
 
+function unlinkRegularFile(path) {
+  try {
+    if (lstatSync(path).isFile()) unlinkSync(path);
+  } catch {
+    // Legacy-state cleanup is best-effort and must not affect SessionStart.
+  }
+}
+
+function purgeLegacyToolFailureState(omcRoot) {
+  const stateDir = join(omcRoot, 'state');
+  try {
+    if (!lstatSync(stateDir).isDirectory()) return;
+  } catch {
+    return;
+  }
+
+  unlinkRegularFile(join(stateDir, 'last-tool-error.json'));
+
+  const sessionsDir = join(stateDir, 'sessions');
+  let sessions;
+  try {
+    if (!lstatSync(sessionsDir).isDirectory()) return;
+    sessions = readdirSync(sessionsDir);
+  } catch {
+    return;
+  }
+
+  for (const sessionId of sessions) {
+    const sessionDir = join(sessionsDir, sessionId);
+    try {
+      if (!lstatSync(sessionDir).isDirectory()) continue;
+      unlinkRegularFile(join(sessionDir, 'last-tool-error-state.json'));
+    } catch {
+      // Skip inaccessible or replaced session directories.
+    }
+  }
+}
+
 const WORKFLOW_SLOT_TOMBSTONE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function isWorkflowSlotTombstonedForMode(omcRoot, mode, sessionId) {
@@ -1056,6 +1094,7 @@ async function main() {
     }
     const sessionId = data.session_id || data.sessionId || '';
     const omcRoot = await resolveOmcStateRoot(directory);
+    purgeLegacyToolFailureState(omcRoot);
     let messages = [];
     const userMessages = [];
     let pendingRestore = null;

@@ -3,7 +3,7 @@
 // Restores persistent mode states when session starts
 // Cross-platform: Windows, macOS, Linux
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, rmSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, renameSync, unlinkSync, rmSync, statSync, lstatSync } from 'fs';
 import { join, dirname, normalize, resolve } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -46,6 +46,44 @@ function readJsonFile(path) {
     return JSON.parse(readFileSync(path, 'utf-8'));
   } catch {
     return null;
+  }
+}
+
+function unlinkRegularFile(path) {
+  try {
+    if (lstatSync(path).isFile()) unlinkSync(path);
+  } catch {
+    // Legacy-state cleanup is best-effort and must not affect SessionStart.
+  }
+}
+
+function purgeLegacyToolFailureState(omcRoot) {
+  const stateDir = join(omcRoot, 'state');
+  try {
+    if (!lstatSync(stateDir).isDirectory()) return;
+  } catch {
+    return;
+  }
+
+  unlinkRegularFile(join(stateDir, 'last-tool-error.json'));
+
+  const sessionsDir = join(stateDir, 'sessions');
+  let sessions;
+  try {
+    if (!lstatSync(sessionsDir).isDirectory()) return;
+    sessions = readdirSync(sessionsDir);
+  } catch {
+    return;
+  }
+
+  for (const sessionId of sessions) {
+    const sessionDir = join(sessionsDir, sessionId);
+    try {
+      if (!lstatSync(sessionDir).isDirectory()) continue;
+      unlinkRegularFile(join(sessionDir, 'last-tool-error-state.json'));
+    } catch {
+      // Skip inaccessible or replaced session directories.
+    }
   }
 }
 
@@ -604,6 +642,7 @@ async function main() {
       return;
     }
     const sessionId = data.sessionId || data.session_id || data.sessionid || '';
+    purgeLegacyToolFailureState(await resolveOmcStateRoot(directory));
     if (process.env.CLAUDE_PLUGIN_ROOT) {
       // Issue #3995: resolve plugin-cache occupancy ONCE per session start.
       // The win32 batched identity host (the only PowerShell spawn on this

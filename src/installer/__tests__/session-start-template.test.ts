@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -69,6 +69,59 @@ describe('session-start template retired-state handling', () => {
     expect(context).not.toContain('[PARALLEL SESSION WARNING]');
     expect(context).not.toContain('[ULTRAWORK MODE RESTORED]');
     expect(context).not.toContain('Old task that should not bleed into session-b');
+  });
+
+  it('purges legacy tool-failure state without disturbing unrelated inactive-session state', () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const oldSessionDir = join(stateDir, 'sessions', 'session-old-without-marker');
+    mkdirSync(oldSessionDir, { recursive: true });
+    const legacyRootError = join(stateDir, 'last-tool-error.json');
+    const legacySessionError = join(oldSessionDir, 'last-tool-error-state.json');
+    const unrelatedState = join(oldSessionDir, 'unrelated-state.json');
+    writeFileSync(legacyRootError, JSON.stringify({ tool_input_preview: 'legacy input secret', error: 'legacy raw error' }));
+    writeFileSync(legacySessionError, JSON.stringify({ tool_input_preview: 'legacy input secret', error: 'legacy raw error' }));
+    writeFileSync(unrelatedState, 'preserve this state');
+
+    const output = runSessionStart({
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+
+    expect(output.continue).toBe(true);
+    expect(existsSync(legacyRootError)).toBe(false);
+    expect(existsSync(legacySessionError)).toBe(false);
+    expect(existsSync(join(oldSessionDir, 'session-started.json'))).toBe(false);
+    expect(readFileSync(unrelatedState, 'utf-8')).toBe('preserve this state');
+  });
+
+  it.skipIf(process.platform === 'win32')('does not follow symlinked session directories or state files', () => {
+    const sessionsDir = join(fakeProject, '.omc', 'state', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    const externalSessionDir = join(tempDir, 'external-session');
+    mkdirSync(externalSessionDir, { recursive: true });
+    const externalDirectoryState = join(externalSessionDir, 'last-tool-error-state.json');
+    writeFileSync(externalDirectoryState, 'preserve through directory symlink');
+    const directoryLink = join(sessionsDir, 'session-directory-link');
+    symlinkSync(externalSessionDir, directoryLink, 'dir');
+
+    const fileSessionDir = join(sessionsDir, 'session-file-link');
+    mkdirSync(fileSessionDir, { recursive: true });
+    const externalFileState = join(tempDir, 'external-state.json');
+    writeFileSync(externalFileState, 'preserve through file symlink');
+    const fileLink = join(fileSessionDir, 'last-tool-error-state.json');
+    symlinkSync(externalFileState, fileLink, 'file');
+
+    runSessionStart({
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+
+    expect(existsSync(directoryLink)).toBe(true);
+    expect(existsSync(externalDirectoryState)).toBe(true);
+    expect(existsSync(fileLink)).toBe(true);
+    expect(existsSync(externalFileState)).toBe(true);
   });
 
   it('keeps template session-start under budget when only a tiny omission remainder remains', () => {
