@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,81 @@ import { join } from 'node:path';
 
 const SCRIPT_PATH = join(__dirname, '..', '..', '..', 'templates', 'hooks', 'session-start.mjs');
 const NODE = process.execPath;
+
+function startPostToolFailureLockHolder(statePath: string) {
+  const source = `import { openSync, writeSync, closeSync, unlinkSync, constants } from 'node:fs';
+const lockPath = process.argv[1] + '.lock';
+const fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+writeSync(fd, JSON.stringify({ pid: process.pid, timestamp: Date.now() }), null, 'utf-8');
+process.stdout.write('LOCKED\\n');
+process.stdin.once('data', () => {
+  try { closeSync(fd); unlinkSync(lockPath); process.exitCode = 0; }
+  catch { process.exitCode = 1; }
+});`;
+  const child = spawn(NODE, ['--input-type=module', '-e', source, statePath], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let readyOutput = '';
+  let exitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once('exit', (code, signal) => {
+      exitResult = { code, signal };
+      resolve(exitResult);
+    });
+  });
+  const ready = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => finish(new Error(`Timed out waiting for lock holder: ${readyOutput}`)), 5000);
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.stdout.off('data', onStdout);
+      child.stderr.off('data', onStderr);
+      child.off('exit', onExit);
+      child.off('error', onError);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onStdout = (chunk: Buffer) => {
+      readyOutput += chunk.toString();
+      if (readyOutput.includes('LOCKED\n')) finish();
+    };
+    const onStderr = (chunk: Buffer) => { readyOutput += chunk.toString(); };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(new Error(`Lock holder exited before acquisition (${code ?? signal}): ${readyOutput}`));
+    };
+    const onError = (error: Error) => finish(error);
+    child.stdout.on('data', onStdout);
+    child.stderr.on('data', onStderr);
+    child.once('exit', onExit);
+    child.once('error', onError);
+  });
+
+  const waitForExit = async (timeoutMs: number) => {
+    if (exitResult) return exitResult;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), timeoutMs);
+    });
+    const result = await Promise.race([exited, timedOut]);
+    if (timeout) clearTimeout(timeout);
+    return result;
+  };
+
+  return {
+    ready,
+    async release() {
+      if (!exitResult) {
+        try { child.stdin.end('release'); } catch {}
+      }
+      let result = await waitForExit(5000);
+      if (!result) {
+        child.kill();
+        result = await waitForExit(1000);
+      }
+      return result;
+    },
+  };
+}
 
 describe('session-start template retired-state handling', () => {
   let tempDir: string;
@@ -155,6 +230,36 @@ describe('session-start template retired-state handling', () => {
     for (const path of legacyPaths) expect(existsSync(path)).toBe(false);
     expect(existsSync(freshPath)).toBe(true);
     expect(existsSync(unrelatedTempPath)).toBe(true);
+  });
+
+  it('preserves an in-flight legacy temp until the PostToolUseFailure lock is released', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const canonicalPath = join(stateDir, 'last-tool-error.json');
+    const tempPath = join(stateDir, `.last-tool-error.json.tmp.${randomUUID()}`);
+    const holder = startPostToolFailureLockHolder(canonicalPath);
+
+    try {
+      await holder.ready;
+      writeFileSync(tempPath, '{"tool_input_preview":"in-flight legacy payload"');
+      const inFlightOutput = runSessionStart({
+        hook_event_name: 'SessionStart',
+        session_id: 'session-current',
+        cwd: fakeProject,
+      }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+      expect(inFlightOutput.continue).toBe(true);
+      expect(existsSync(tempPath)).toBe(true);
+
+      expect(await holder.release()).toEqual({ code: 0, signal: null });
+      const retryOutput = runSessionStart({
+        hook_event_name: 'SessionStart',
+        session_id: 'session-current',
+        cwd: fakeProject,
+      }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+      expect(retryOutput.continue).toBe(true);
+      expect(existsSync(tempPath)).toBe(false);
+    } finally {
+      await holder.release();
+    }
   });
 
   it('purges legacy tool-failure state from the home root on no-workspace startup', () => {

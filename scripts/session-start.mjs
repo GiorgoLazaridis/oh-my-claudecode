@@ -6,7 +6,7 @@
  * Cross-platform: Windows, macOS, Linux
  */
 
-import { existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync, statSync, openSync, closeSync, writeSync, constants as fsConstants } from 'fs';
 import { spawn } from 'child_process';
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'path';
 import { homedir } from 'os';
@@ -127,6 +127,83 @@ function purgeToolFailureTemps(directory) {
   }
 }
 
+const POST_TOOL_FAILURE_LOCK_STALE_MS = 30_000;
+
+function isPostToolFailureLockStale(path) {
+  try {
+    const stats = lstatSync(path);
+    if (!stats.isFile()) return false;
+    try {
+      const owner = JSON.parse(readFileSync(path, 'utf-8'));
+      if (Number.isSafeInteger(owner.pid) && owner.pid > 0) {
+        try {
+          process.kill(owner.pid, 0);
+          return false;
+        } catch (error) {
+          if (error?.code === 'ESRCH') return true;
+          return false;
+        }
+      }
+    } catch {}
+    return Date.now() - stats.mtimeMs >= POST_TOOL_FAILURE_LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function createPostToolFailureLock(path) {
+  let fd;
+  try {
+    fd = openSync(path, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+    writeSync(fd, JSON.stringify({ pid: process.pid, timestamp: Date.now() }), null, 'utf-8');
+    return { fd, path };
+  } catch (error) {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+      try { unlinkSync(path); } catch {}
+    }
+    throw error;
+  }
+}
+
+function tryAcquirePostToolFailureLock(canonicalPath) {
+  const path = `${canonicalPath}.lock`;
+  try {
+    return createPostToolFailureLock(path);
+  } catch (error) {
+    if (error?.code !== 'EEXIST' || !isPostToolFailureLockStale(path)) return null;
+    try { unlinkSync(path); } catch {}
+    try { return createPostToolFailureLock(path); } catch { return null; }
+  }
+}
+
+function releasePostToolFailureLock(lock) {
+  try { closeSync(lock.fd); } catch {}
+  try { unlinkSync(lock.path); } catch {}
+}
+
+function hasToolFailureArtifacts(directory, canonicalFilename) {
+  try {
+    if (!lstatSync(directory).isDirectory()) return false;
+    return readdirSync(directory).some(name => name === canonicalFilename || TOOL_FAILURE_TEMP_FILE_PATTERN.test(name));
+  } catch {
+    return false;
+  }
+}
+
+function purgeToolFailureStateDirectory(directory, canonicalFilename) {
+  if (!hasToolFailureArtifacts(directory, canonicalFilename)) return;
+  const canonicalPath = join(directory, canonicalFilename);
+  const postToolFailureLock = tryAcquirePostToolFailureLock(canonicalPath);
+  if (!postToolFailureLock) return;
+  try {
+    purgeLegacyToolFailureFile(canonicalPath);
+    purgeToolFailureTemps(directory);
+  } finally {
+    releasePostToolFailureLock(postToolFailureLock);
+  }
+}
+
 function purgeLegacyToolFailureState(omcRoot) {
   const stateDir = join(omcRoot, 'state');
   try {
@@ -135,8 +212,7 @@ function purgeLegacyToolFailureState(omcRoot) {
     return;
   }
 
-  purgeLegacyToolFailureFile(join(stateDir, 'last-tool-error.json'));
-  purgeToolFailureTemps(stateDir);
+  purgeToolFailureStateDirectory(stateDir, 'last-tool-error.json');
 
   const sessionsDir = join(stateDir, 'sessions');
   let sessions;
@@ -151,8 +227,7 @@ function purgeLegacyToolFailureState(omcRoot) {
     const sessionDir = join(sessionsDir, sessionId);
     try {
       if (!lstatSync(sessionDir).isDirectory()) continue;
-      purgeLegacyToolFailureFile(join(sessionDir, 'last-tool-error-state.json'));
-      purgeToolFailureTemps(sessionDir);
+      purgeToolFailureStateDirectory(sessionDir, 'last-tool-error-state.json');
     } catch {
       // Skip inaccessible or replaced session directories.
     }
