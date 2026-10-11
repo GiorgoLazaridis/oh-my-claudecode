@@ -394,7 +394,7 @@ describe('session-start.mjs regression #1386', () => {
     writeFileSync(legacyPath, JSON.stringify({ tool_input_preview: 'unverifiable legacy secret' }));
     writeFileSync(`${legacyPath}.lock`, 'malformed lock metadata');
 
-    const output = JSON.parse(await startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+    const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
       hook_event_name: 'SessionStart',
       session_id: 'session-current',
       cwd: fakeProject,
@@ -402,14 +402,20 @@ describe('session-start.mjs regression #1386', () => {
       CLAUDE_PLUGIN_ROOT: '',
       OMC_STATE_DIR: '',
       OMC_HOOK_BACKGROUND_CHILD: '0',
-      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
-    }).output);
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '1500',
+    });
+    const workerLockAppeared = waitForFilesToAppear([workerLockPath], 5000);
 
-    expect(output.continue).toBe(true);
-    expect(existsSync(legacyPath)).toBe(true);
-    expect(readFileSync(`${legacyPath}.lock`, 'utf-8')).toBe('malformed lock metadata');
-    expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
-    expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
+    try {
+      const output = JSON.parse(await sessionStart.output);
+      expect(output.continue).toBe(true);
+      expect(existsSync(legacyPath)).toBe(true);
+      expect(readFileSync(`${legacyPath}.lock`, 'utf-8')).toBe('malformed lock metadata');
+      expect(await workerLockAppeared).toBe(true);
+      expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
+    } finally {
+      await sessionStart.output.catch(() => '');
+    }
   });
 
   it('lets stabilization workers exit while sanitized failure records remain', async () => {
@@ -432,12 +438,13 @@ describe('session-start.mjs regression #1386', () => {
       CLAUDE_PLUGIN_ROOT: '',
       OMC_STATE_DIR: '',
       OMC_HOOK_BACKGROUND_CHILD: '0',
-      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '1500',
     });
+    const workerLockAppeared = waitForFilesToAppear([workerLockPath], 5000);
 
     try {
       expect(JSON.parse(await sessionStart.output).continue).toBe(true);
-      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      expect(await workerLockAppeared).toBe(true);
       expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
       expect(JSON.parse(readFileSync(legacyPath, 'utf-8'))).toEqual(sanitizedState);
     } finally {

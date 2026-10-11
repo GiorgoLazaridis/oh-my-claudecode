@@ -456,14 +456,15 @@ describe('session-start template retired-state handling', () => {
       CLAUDE_PLUGIN_ROOT: '',
       OMC_STATE_DIR: '',
       OMC_HOOK_BACKGROUND_CHILD: '0',
-      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '1500',
     });
+    const workerLockAppeared = waitForFilesToAppear([workerLockPath], 5000);
 
     try {
       expect(JSON.parse(await sessionStart.output).continue).toBe(true);
       expect(existsSync(legacyPath)).toBe(true);
       expect(readFileSync(`${legacyPath}.lock`, 'utf-8')).toBe('malformed lock metadata');
-      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      expect(await workerLockAppeared).toBe(true);
       expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
     } finally {
       await sessionStart.output.catch(() => '');
@@ -490,12 +491,13 @@ describe('session-start template retired-state handling', () => {
       CLAUDE_PLUGIN_ROOT: '',
       OMC_STATE_DIR: '',
       OMC_HOOK_BACKGROUND_CHILD: '0',
-      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '1500',
     });
+    const workerLockAppeared = waitForFilesToAppear([workerLockPath], 5000);
 
     try {
       expect(JSON.parse(await sessionStart.output).continue).toBe(true);
-      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      expect(await workerLockAppeared).toBe(true);
       expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
       expect(JSON.parse(readFileSync(legacyPath, 'utf-8'))).toEqual(sanitizedState);
     } finally {
