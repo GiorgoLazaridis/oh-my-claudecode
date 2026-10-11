@@ -279,7 +279,8 @@ function hasActiveOlderPluginRoot() {
   try {
     const currentRoot = pathIdentity(pluginRoot);
     const pluginVersionsDirectory = dirname(currentRoot);
-    const { roots } = readOccupiedPluginRoots(configDir);
+    const { roots, unavailable } = readOccupiedPluginRoots(configDir);
+    if (unavailable) return true;
     return [...roots].some(root => root !== currentRoot && dirname(root) === pluginVersionsDirectory);
   } catch {
     return false;

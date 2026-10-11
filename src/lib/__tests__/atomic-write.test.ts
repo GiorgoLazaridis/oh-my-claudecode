@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import type { FileHandle } from 'fs/promises';
 
 import {
@@ -17,6 +17,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { pathToFileURL } from 'node:url';
 import { getProcessStartIdentitySync } from '../../platform/process-utils.js';
 // @ts-expect-error Hook runtime source is intentionally JavaScript-only.
 import { getStateFileLockFailureKind, withStateFileLockAtPathSync, withStateFileLockSync } from '../../../scripts/lib/atomic-write.mjs';
@@ -387,6 +388,28 @@ describe('atomicWriteJson', () => {
     } finally {
       child.kill();
     }
+  });
+
+  it.skipIf(process.platform !== 'linux')('reclaims legacy locks when getconf is unavailable', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-no-getconf-'));
+    directories.push(directory);
+    const lockPath = join(directory, 'last-tool-error.json.lock');
+    const stateLockUrl = pathToFileURL(join(__dirname, '..', '..', '..', 'scripts', 'lib', 'state-lock.mjs')).href;
+    const script = `
+      import { existsSync, writeFileSync } from 'node:fs';
+      const { withStateFileLockAtPathSync } = await import(process.argv[1]);
+      const lockPath = process.argv[2];
+      writeFileSync(lockPath, JSON.stringify({ pid: process.pid, timestamp: 1 }));
+      const result = withStateFileLockAtPathSync(lockPath, () => 'written', false, 2);
+      process.stdout.write(JSON.stringify({ result, lockExists: existsSync(lockPath) }));
+    `;
+
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', script, stateLockUrl, lockPath], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_ENV: 'test', OMC_TEST_FLOCK_AVAILABLE: '0', PATH: '' },
+    });
+
+    expect(JSON.parse(output)).toEqual({ result: { acquired: true, value: 'written' }, lockExists: false });
   });
 
   it('keeps a live legacy owner lock after thirty seconds', () => {

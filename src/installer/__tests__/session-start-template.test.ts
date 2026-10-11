@@ -540,6 +540,42 @@ describe('session-start template retired-state handling', () => {
     }
   });
 
+  it('keeps stabilization active while plugin occupancy is unavailable', async () => {
+    const configDir = join(fakeHome, '.claude');
+    const pluginParent = join(tempDir, 'plugin-cache', 'oh-my-claudecode');
+    const currentPluginRoot = join(pluginParent, 'current');
+    const registryDir = join(configDir, '.omc', 'cache-occupancy');
+    const workerLockPath = join(fakeProject, '.omc', 'state', '.legacy-tool-failure-cleanup-worker.lock');
+    mkdirSync(join(configDir, '.omc'), { recursive: true });
+    writeFileSync(registryDir, 'temporarily unavailable');
+
+    const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, {
+      CLAUDE_CONFIG_DIR: configDir,
+      CLAUDE_PLUGIN_ROOT: currentPluginRoot,
+      OMC_STATE_DIR: '',
+      OMC_HOOK_BACKGROUND_CHILD: '0',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+    });
+
+    try {
+      expect(JSON.parse(await sessionStart.output).continue).toBe(true);
+      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 750));
+      expect(existsSync(workerLockPath)).toBe(true);
+
+      rmSync(registryDir, { force: true });
+      mkdirSync(registryDir, { recursive: true });
+      expect(await waitForFilesToDisappear([workerLockPath], 7000)).toBe(true);
+    } finally {
+      rmSync(registryDir, { recursive: true, force: true });
+      await sessionStart.output.catch(() => '');
+    }
+  });
+
   it('waits for state-directory creation while an older plugin root is occupied', async () => {
     const configDir = join(fakeHome, '.claude');
     const pluginParent = join(tempDir, 'plugin-cache', 'oh-my-claudecode');

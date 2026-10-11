@@ -176,9 +176,10 @@ function processStartTimestamp(pid, expectedIdentity) {
           env: { ...process.env, LC_ALL: 'C' },
         });
         const ticks = result.status === 0 ? Number(result.stdout.trim()) : NaN;
-        linuxClockTicksPerSecond = Number.isSafeInteger(ticks) && ticks > 0 ? ticks : null;
+        // Linux procfs reports USER_HZ, which is 100 on supported Linux ABIs.
+        // Keep legacy-lock migration functional on minimal hosts without getconf.
+        linuxClockTicksPerSecond = Number.isSafeInteger(ticks) && ticks > 0 ? ticks : 100;
       }
-      if (linuxClockTicksPerSecond === null) return null;
       return realDateNow() - uptimeSeconds * 1000 + Number(startTicks) * 1000 / linuxClockTicksPerSecond;
     } catch {
       return null;
