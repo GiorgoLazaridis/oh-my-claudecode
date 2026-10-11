@@ -327,10 +327,11 @@ async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
         const cleanupPending = await purgeLegacyToolFailureState(omcRoot, POST_TOOL_FAILURE_LOCK_WAIT_MS, false);
         if (cleanupPending) quietUntil = Date.now() + stabilizationMs;
       }
-      await new Promise(resolve => setTimeout(resolve, Math.min(
-        TOOL_FAILURE_CLEANUP_RESCAN_MS,
-        Math.max(1, quietUntil - Date.now()),
-      )));
+      const remainingQuietMs = quietUntil - Date.now();
+      const pollDelayMs = remainingQuietMs > 0
+        ? Math.min(TOOL_FAILURE_CLEANUP_RESCAN_MS, remainingQuietMs)
+        : TOOL_FAILURE_CLEANUP_RESCAN_MS;
+      await new Promise(resolve => setTimeout(resolve, pollDelayMs));
     }
   } finally {
     stateLock.releaseStateFileLockSync(workerLock);
