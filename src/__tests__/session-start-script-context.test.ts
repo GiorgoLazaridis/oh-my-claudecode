@@ -412,6 +412,39 @@ describe('session-start.mjs regression #1386', () => {
     expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
   });
 
+  it('lets stabilization workers exit while sanitized failure records remain', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const legacyPath = join(stateDir, 'last-tool-error.json');
+    const workerLockPath = join(stateDir, '.legacy-tool-failure-cleanup-worker.lock');
+    const sanitizedState = {
+      tool_name: 'Bash',
+      error: 'Tool execution failed (details omitted for privacy).',
+      timestamp: new Date().toISOString(),
+      retry_count: 1,
+    };
+    writeFileSync(legacyPath, JSON.stringify(sanitizedState));
+
+    const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, {
+      CLAUDE_PLUGIN_ROOT: '',
+      OMC_STATE_DIR: '',
+      OMC_HOOK_BACKGROUND_CHILD: '0',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+    });
+
+    try {
+      expect(JSON.parse(await sessionStart.output).continue).toBe(true);
+      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
+      expect(JSON.parse(readFileSync(legacyPath, 'utf-8'))).toEqual(sanitizedState);
+    } finally {
+      await sessionStart.output.catch(() => '');
+    }
+  });
+
   it('rescans root and newly created session records after the startup snapshot', async () => {
     const stateDir = join(fakeProject, '.omc', 'state');
     const rootPath = join(stateDir, 'last-tool-error.json');

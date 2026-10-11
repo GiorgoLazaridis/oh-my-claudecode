@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { provisionStandaloneStateLockBridge } from '../index.js';
+// @ts-expect-error Standalone hook runtime source is intentionally JavaScript-only.
+import { publishCacheOccupancy } from '../../../scripts/lib/cache-occupancy.mjs';
 
 const REPO_ROOT = resolve(join(__dirname, '..', '..', '..'));
 const TEMPLATE_ROOT = mkdtempSync(join(tmpdir(), 'omc-session-start-template-'));
@@ -464,6 +466,74 @@ describe('session-start template retired-state handling', () => {
       expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
       expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
     } finally {
+      await sessionStart.output.catch(() => '');
+    }
+  });
+
+  it('lets stabilization workers exit while sanitized failure records remain', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const legacyPath = join(stateDir, 'last-tool-error.json');
+    const workerLockPath = join(stateDir, '.legacy-tool-failure-cleanup-worker.lock');
+    const sanitizedState = {
+      tool_name: 'Bash',
+      error: 'Tool execution failed (details omitted for privacy).',
+      timestamp: new Date().toISOString(),
+      retry_count: 1,
+    };
+    writeFileSync(legacyPath, JSON.stringify(sanitizedState));
+
+    const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, {
+      CLAUDE_PLUGIN_ROOT: '',
+      OMC_STATE_DIR: '',
+      OMC_HOOK_BACKGROUND_CHILD: '0',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+    });
+
+    try {
+      expect(JSON.parse(await sessionStart.output).continue).toBe(true);
+      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
+      expect(JSON.parse(readFileSync(legacyPath, 'utf-8'))).toEqual(sanitizedState);
+    } finally {
+      await sessionStart.output.catch(() => '');
+    }
+  });
+
+  it('keeps stabilization active while an older plugin root is occupied', async () => {
+    const configDir = join(fakeHome, '.claude');
+    const pluginParent = join(tempDir, 'plugin-cache', 'oh-my-claudecode');
+    const currentPluginRoot = join(pluginParent, 'current');
+    const olderPluginRoot = join(pluginParent, 'older');
+    const registryDir = join(configDir, '.omc', 'cache-occupancy');
+    const workerLockPath = join(fakeProject, '.omc', 'state', '.legacy-tool-failure-cleanup-worker.lock');
+    expect(publishCacheOccupancy(olderPluginRoot, configDir, process.pid)).toBe(true);
+
+    const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, {
+      CLAUDE_CONFIG_DIR: configDir,
+      CLAUDE_PLUGIN_ROOT: currentPluginRoot,
+      OMC_STATE_DIR: '',
+      OMC_HOOK_BACKGROUND_CHILD: '0',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+    });
+
+    try {
+      expect(JSON.parse(await sessionStart.output).continue).toBe(true);
+      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 750));
+      expect(existsSync(workerLockPath)).toBe(true);
+
+      rmSync(registryDir, { recursive: true, force: true });
+      expect(await waitForFilesToDisappear([workerLockPath], 7000)).toBe(true);
+    } finally {
+      rmSync(registryDir, { recursive: true, force: true });
       await sessionStart.output.catch(() => '');
     }
   });
