@@ -96,7 +96,7 @@ function purgeLegacyToolFailureFile(path) {
   if (!isSanitizedToolFailureState(state)) unlinkRegularFile(path);
 }
 
-function purgeStaleToolFailureTemps(directory) {
+function purgeToolFailureTemps(directory) {
   let entries;
   try {
     if (!lstatSync(directory).isDirectory()) return;
@@ -105,13 +105,16 @@ function purgeStaleToolFailureTemps(directory) {
     return;
   }
 
-  const now = Date.now();
   for (const name of entries) {
     if (!TOOL_FAILURE_TEMP_FILE_PATTERN.test(name)) continue;
     const path = join(directory, name);
     try {
       const stats = lstatSync(path);
-      if (stats.isFile() && now - stats.mtimeMs >= TOOL_FAILURE_TEMP_MIN_AGE_MS) unlinkSync(path);
+      if (!stats.isFile()) continue;
+      let state;
+      try { state = JSON.parse(readFileSync(path, 'utf-8')); } catch {}
+      if (isSanitizedToolFailureState(state) && Date.now() - stats.mtimeMs < TOOL_FAILURE_TEMP_MIN_AGE_MS) continue;
+      unlinkRegularFile(path);
     } catch {
       // A concurrent or inaccessible temp file must not affect SessionStart.
     }
@@ -127,7 +130,7 @@ function purgeLegacyToolFailureState(omcRoot) {
   }
 
   purgeLegacyToolFailureFile(join(stateDir, 'last-tool-error.json'));
-  purgeStaleToolFailureTemps(stateDir);
+  purgeToolFailureTemps(stateDir);
 
   const sessionsDir = join(stateDir, 'sessions');
   let sessions;
@@ -143,7 +146,7 @@ function purgeLegacyToolFailureState(omcRoot) {
     try {
       if (!lstatSync(sessionDir).isDirectory()) continue;
       purgeLegacyToolFailureFile(join(sessionDir, 'last-tool-error-state.json'));
-      purgeStaleToolFailureTemps(sessionDir);
+      purgeToolFailureTemps(sessionDir);
     } catch {
       // Skip inaccessible or replaced session directories.
     }

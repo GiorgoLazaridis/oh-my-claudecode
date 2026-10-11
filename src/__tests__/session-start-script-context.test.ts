@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,25 +130,27 @@ describe('session-start.mjs regression #1386', () => {
     expect(JSON.parse(readFileSync(sessionPath, 'utf-8'))).toEqual(sessionState);
   });
 
-  it('removes stale tool-failure atomic temps at root and session scope but retains fresh temps', () => {
+  it('purges legacy atomic temp files but preserves a fresh sanitized temp', () => {
     const stateDir = join(fakeProject, '.omc', 'state');
     const sessionDir = join(stateDir, 'sessions', 'session-temp-files');
     mkdirSync(sessionDir, { recursive: true });
-    const stalePaths = [
+    const legacyPaths = [
       join(stateDir, `.last-tool-error.json.tmp.${randomUUID()}`),
       join(stateDir, `.last-tool-error-state.json.tmp.${randomUUID()}`),
       join(sessionDir, `.last-tool-error.json.tmp.${randomUUID()}`),
       join(sessionDir, `.last-tool-error-state.json.tmp.${randomUUID()}`),
     ];
-    for (const path of stalePaths) writeFileSync(path, 'orphaned atomic temp');
-    const staleTime = new Date(Date.now() - 61_000);
-    for (const path of stalePaths) utimesSync(path, staleTime, staleTime);
+    for (const path of legacyPaths) writeFileSync(path, JSON.stringify({ tool_input_preview: 'legacy temp secret', error: 'legacy raw error' }));
 
     const freshPath = join(stateDir, `.last-tool-error.json.tmp.${randomUUID()}`);
     const unrelatedTempPath = join(stateDir, '.last-tool-error.json.tmp.not-a-uuid');
-    writeFileSync(freshPath, 'active atomic temp');
+    writeFileSync(freshPath, JSON.stringify({
+      tool_name: 'Bash',
+      error: 'Tool execution failed (details omitted for privacy).',
+      timestamp: new Date().toISOString(),
+      retry_count: 4,
+    }));
     writeFileSync(unrelatedTempPath, 'not an atomic temp name');
-    utimesSync(unrelatedTempPath, staleTime, staleTime);
 
     const output = JSON.parse(execFileSync(NODE, [SCRIPT_PATH], {
       input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'session-current', cwd: fakeProject }),
@@ -164,7 +166,7 @@ describe('session-start.mjs regression #1386', () => {
     }));
 
     expect(output.continue).toBe(true);
-    for (const path of stalePaths) expect(existsSync(path)).toBe(false);
+    for (const path of legacyPaths) expect(existsSync(path)).toBe(false);
     expect(existsSync(freshPath)).toBe(true);
     expect(existsSync(unrelatedTempPath)).toBe(true);
   });
