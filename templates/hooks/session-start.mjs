@@ -14,7 +14,6 @@ const __dirname = dirname(__filename);
 const { getClaudeConfigDir, getUpdateCheckCachePath } = await import(pathToFileURL(join(__dirname, 'lib', 'config-dir.mjs')).href);
 const configDir = getClaudeConfigDir();
 const { resolveSessionStatePathsForHook, resolveOmcStateRoot } = await import(pathToFileURL(join(__dirname, 'lib', 'state-root.mjs')).href);
-const { acquireStateFileLockAtPathSync, releaseStateFileLockSync } = await import(pathToFileURL(join(__dirname, 'lib', 'state-lock.mjs')).href);
 const { publishCacheOccupancy, readOccupiedPluginRoots } = await import(pathToFileURL(join(__dirname, 'lib', 'cache-occupancy.mjs')).href);
 
 // Detached update-cache refresh: argv flag and the child's overall deadline.
@@ -126,8 +125,17 @@ const POST_TOOL_FAILURE_LOCK_WAIT_MS = 2500;
 const POST_TOOL_FAILURE_DEFERRED_WAIT_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_RETRY_MS = 50;
 const DEFERRED_TOOL_FAILURE_CLEANUP_FLAG = '--purge-legacy-tool-failure-state';
+let postToolFailureStateLockModule;
+
+async function loadPostToolFailureStateLock() {
+  if (!postToolFailureStateLockModule) {
+    postToolFailureStateLockModule = await import(pathToFileURL(join(__dirname, 'lib', 'state-lock.mjs')).href);
+  }
+  return postToolFailureStateLockModule;
+}
 
 async function waitForPostToolFailureLock(canonicalPath, deadline) {
+  const { acquireStateFileLockAtPathSync } = await loadPostToolFailureStateLock();
   while (Date.now() < deadline) {
     const lock = acquireStateFileLockAtPathSync(`${canonicalPath}.lock`, 1, true);
     if (lock) return lock;
@@ -138,7 +146,7 @@ async function waitForPostToolFailureLock(canonicalPath, deadline) {
 }
 
 function releasePostToolFailureLock(lock) {
-  releaseStateFileLockSync(lock);
+  postToolFailureStateLockModule.releaseStateFileLockSync(lock);
 }
 
 function hasToolFailureArtifacts(directory, canonicalFilename) {
