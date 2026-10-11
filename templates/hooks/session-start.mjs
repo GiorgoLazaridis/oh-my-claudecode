@@ -122,6 +122,7 @@ function purgeToolFailureTemps(directory) {
 }
 
 const POST_TOOL_FAILURE_LOCK_WAIT_MS = 2500;
+const POST_TOOL_FAILURE_SQLITE_BUSY_WAIT_MS = 100;
 const POST_TOOL_FAILURE_DEFERRED_WAIT_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_RETRY_MS = 50;
 const DEFERRED_TOOL_FAILURE_CLEANUP_FLAG = '--purge-legacy-tool-failure-state';
@@ -141,11 +142,17 @@ async function loadPostToolFailureStateLock() {
 async function waitForPostToolFailureLock(canonicalPath, deadline) {
   const { acquireStateFileLockAtPathSync, getStateFileLockFailureKind } = await loadPostToolFailureStateLock();
   while (Date.now() < deadline) {
-    const lock = acquireStateFileLockAtPathSync(`${canonicalPath}.lock`, 1, true);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { lock: null, timedOut: true };
+    const lock = acquireStateFileLockAtPathSync(
+      `${canonicalPath}.lock`, 1, true, false, Math.min(POST_TOOL_FAILURE_SQLITE_BUSY_WAIT_MS, remaining),
+    );
     if (lock) return { lock, timedOut: false };
     if (getStateFileLockFailureKind() !== 'contention') return { lock: null, timedOut: false };
-    const remaining = deadline - Date.now();
-    if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(POST_TOOL_FAILURE_LOCK_RETRY_MS, remaining)));
+    const remainingAfterAttempt = deadline - Date.now();
+    if (remainingAfterAttempt > 0) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(POST_TOOL_FAILURE_LOCK_RETRY_MS, remainingAfterAttempt)));
+    }
   }
   return { lock: null, timedOut: true };
 }
