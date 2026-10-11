@@ -341,11 +341,6 @@ async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
         olderPluginActive = hasActiveOlderPluginRoot();
         nextPluginRootCheck = now + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
       }
-      if (now >= quietUntil && !olderPluginActive) {
-        olderPluginActive = hasActiveOlderPluginRoot();
-        nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
-        if (!olderPluginActive) break;
-      }
       const currentArtifactSnapshot = legacyToolFailureArtifactSnapshot(omcRoot);
       if (currentArtifactSnapshot !== artifactSnapshot) {
         artifactSnapshot = currentArtifactSnapshot;
@@ -354,6 +349,23 @@ async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
       if (currentArtifactSnapshot) {
         const cleanupPending = await purgeLegacyToolFailureState(omcRoot, POST_TOOL_FAILURE_LOCK_WAIT_MS, false);
         if (cleanupPending) quietUntil = Date.now() + stabilizationMs;
+      }
+      if (Date.now() >= quietUntil && !olderPluginActive) {
+        olderPluginActive = hasActiveOlderPluginRoot();
+        nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
+        if (!olderPluginActive) {
+          const finalArtifactSnapshot = legacyToolFailureArtifactSnapshot(omcRoot);
+          if (finalArtifactSnapshot !== artifactSnapshot) {
+            artifactSnapshot = finalArtifactSnapshot;
+            quietUntil = Date.now() + stabilizationMs;
+            if (finalArtifactSnapshot) {
+              const cleanupPending = await purgeLegacyToolFailureState(omcRoot, POST_TOOL_FAILURE_LOCK_WAIT_MS, false);
+              if (cleanupPending) quietUntil = Date.now() + stabilizationMs;
+            }
+            continue;
+          }
+          break;
+        }
       }
       const remainingQuietMs = quietUntil - Date.now();
       const pollDelayMs = remainingQuietMs > 0

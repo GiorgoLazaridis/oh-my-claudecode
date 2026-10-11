@@ -441,6 +441,38 @@ describe('session-start template retired-state handling', () => {
     }
   });
 
+  it('purges artifacts published after the last stabilization scan', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const legacyPath = join(stateDir, 'last-tool-error.json');
+    const workerLockPath = join(stateDir, '.legacy-tool-failure-cleanup-worker.lock');
+    const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, {
+      CLAUDE_PLUGIN_ROOT: '',
+      OMC_STATE_DIR: '',
+      OMC_HOOK_BACKGROUND_CHILD: '0',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '1000',
+    });
+
+    try {
+      expect(JSON.parse(await sessionStart.output).continue).toBe(true);
+      expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
+      const workerLock = JSON.parse(readFileSync(workerLockPath, 'utf8')) as { createdAt: string };
+      const publishAt = Date.parse(workerLock.createdAt) + 850;
+      const delay = publishAt - Date.now();
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      expect(existsSync(workerLockPath)).toBe(true);
+      writeFileSync(legacyPath, JSON.stringify({ tool_input_preview: 'last-window legacy secret' }));
+
+      expect(await waitForFilesToDisappear([legacyPath], 5000)).toBe(true);
+      expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
+    } finally {
+      await sessionStart.output.catch(() => '');
+    }
+  });
+
   it('releases stabilization workers after unverifiable lock metadata', async () => {
     const stateDir = join(fakeProject, '.omc', 'state');
     const legacyPath = join(stateDir, 'last-tool-error.json');
