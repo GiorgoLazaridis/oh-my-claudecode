@@ -1,12 +1,24 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { afterAll, describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { provisionStandaloneStateLockBridge } from '../index.js';
 
-const SCRIPT_PATH = join(__dirname, '..', '..', '..', 'templates', 'hooks', 'session-start.mjs');
+const REPO_ROOT = resolve(join(__dirname, '..', '..', '..'));
+const TEMPLATE_ROOT = mkdtempSync(join(tmpdir(), 'omc-session-start-template-'));
+const TEMPLATE_HOOKS_ROOT = join(TEMPLATE_ROOT, 'hooks');
+cpSync(join(REPO_ROOT, 'templates', 'hooks'), TEMPLATE_HOOKS_ROOT, { recursive: true });
+copyFileSync(join(REPO_ROOT, 'package.json'), join(TEMPLATE_ROOT, 'package.json'));
+const STATE_LOCK_PATH = join(TEMPLATE_HOOKS_ROOT, 'lib', 'state-lock.mjs');
+provisionStandaloneStateLockBridge(REPO_ROOT, STATE_LOCK_PATH);
+const SCRIPT_PATH = join(TEMPLATE_HOOKS_ROOT, 'session-start.mjs');
 const NODE = process.execPath;
+
+afterAll(() => {
+  rmSync(TEMPLATE_ROOT, { recursive: true, force: true });
+});
 
 function startPostToolFailureLockHolder(statePath: string) {
   const source = `import { openSync, writeSync, closeSync, unlinkSync, constants } from 'node:fs';
@@ -626,6 +638,7 @@ ${'- oversized startup guidance\n'.repeat(700)}
         ...process.env,
         HOME: fakeHome,
         USERPROFILE: fakeHome,
+        CLAUDE_CONFIG_DIR: join(fakeHome, '.claude'),
       },
       timeout: 15000,
     });
@@ -670,6 +683,7 @@ ${'- oversized startup guidance\n'.repeat(700)}
         ...process.env,
         HOME: fakeHome,
         USERPROFILE: fakeHome,
+        CLAUDE_CONFIG_DIR: join(fakeHome, '.claude'),
       },
       timeout: 15000,
     });

@@ -36,6 +36,8 @@ try {
 
 const localLocks = new Map();
 const recoveryLocks = new Map();
+// Pre-upgrade PostToolUseFailure locks contain only a PID and timestamp.
+const LEGACY_FILE_LOCK_STALE_MS = 30_000;
 let ownIdentityCache = null;
 let lastLockFailure = null;
 let lastLockFailureDetail = null;
@@ -124,6 +126,9 @@ function readOwner(path) {
   try {
     const value = JSON.parse(readFileSync(path, 'utf8'));
     const pid = value.pid;
+    if (value.version === undefined && Number.isSafeInteger(pid) && pid > 0 && Number.isFinite(value.timestamp)) {
+      return { version: 0, pid, timestamp: value.timestamp };
+    }
     if (
       value.version !== 1 || !Number.isSafeInteger(pid) || pid <= 0 ||
       typeof value.processStart !== 'string' || !/^\S+$/.test(value.processStart) ||
@@ -137,11 +142,23 @@ function readOwner(path) {
 }
 
 function ownerLive(owner) {
+  if (owner.version === 0) {
+    if (Date.now() - owner.timestamp >= LEGACY_FILE_LOCK_STALE_MS) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === 'ESRCH' ? false : error?.code === 'EPERM' ? true : null;
+    }
+  }
   const current = processStartIdentity(owner.pid);
   return current === null ? null : current === 'absent' ? false : current === owner.processStart;
 }
 
 function sameOwner(left, right) {
+  if (left?.version === 0 || right?.version === 0) {
+    return left?.version === 0 && right?.version === 0 && left.pid === right.pid && left.timestamp === right.timestamp;
+  }
   return Boolean(left && right && left.pid === right.pid && left.processStart === right.processStart && left.nonce === right.nonce);
 }
 
@@ -397,9 +414,12 @@ function acquireFileLock(lockPath, attempts) {
 }
 
 export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusive = false, bypassTestOverride = false) {
+  return acquireStateFileLockAtPathSync(`${filePath}.mutation.lock`, attempts, requireExclusive, bypassTestOverride);
+}
+
+export function acquireStateFileLockAtPathSync(lockPath, attempts = 50, requireExclusive = false, bypassTestOverride = false) {
   lastLockFailureDetail = null;
   void requireExclusive;
-  const lockPath = `${filePath}.mutation.lock`;
   mkdirSync(dirname(lockPath), { recursive: true });
   const key = canonicalKey(lockPath);
   const held = localLocks.get(key);
@@ -423,7 +443,7 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
       return null;
     }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    return acquireStateFileLockSync(filePath, attempts - 1, requireExclusive, bypassTestOverride);
+    return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride);
   }
 
   const processStart = ownProcessStartIdentity();
@@ -434,7 +454,7 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
       return null;
     }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    return acquireStateFileLockSync(filePath, attempts - 1, requireExclusive, bypassTestOverride);
+    return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride);
   }
 
   const owner = {
@@ -464,7 +484,7 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
           return null;
         }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-        return acquireStateFileLockSync(filePath, attempts - 1, requireExclusive, bypassTestOverride);
+        return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride);
       }
       db.prepare('DELETE FROM state_mutation_locks WHERE lock_key = ?').run(key);
     }
@@ -487,7 +507,7 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
           return null;
         }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-        return acquireStateFileLockSync(filePath, attempts - 1, requireExclusive, bypassTestOverride);
+        return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride);
       }
       const identity = ownerArtifactIdentity(lockPath);
       if (!identity) {
@@ -502,7 +522,7 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
         db.close();
         if (reclaimed === 'changed' && attempts > 1) {
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-          return acquireStateFileLockSync(filePath, attempts - 1, requireExclusive, bypassTestOverride);
+          return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride);
         }
         recordFailure(reclaimed === 'changed' ? 'contention' : 'unverifiable');
         return null;
@@ -518,7 +538,7 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
         return null;
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-      return acquireStateFileLockSync(filePath, attempts - 1, requireExclusive, bypassTestOverride);
+      return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride);
     }
     db.exec('COMMIT');
     const lock = { backend: 'sqlite', db, key, path: lockPath, owner, depth: 1 };
@@ -531,7 +551,7 @@ export function acquireStateFileLockSync(filePath, attempts = 50, requireExclusi
     if (isNativeBindingError(error)) sqliteBindingLoadError = nativeBindingDiagnostic(errorMessage(error));
     if (retry(error?.code) && attempts > 1) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-      return acquireStateFileLockSync(filePath, attempts - 1, requireExclusive, bypassTestOverride);
+      return acquireStateFileLockAtPathSync(lockPath, attempts - 1, requireExclusive, bypassTestOverride);
     }
     recordFailure(error?.code === 'SQLITE_BUSY' || error?.code === 'SQLITE_LOCKED' ? 'contention' : 'unverifiable');
     return null;
@@ -589,7 +609,11 @@ export function releaseStateFileLockSync(lock) {
 }
 
 export function withStateFileLockSync(filePath, callback, requireExclusive = false) {
-  const lock = acquireStateFileLockSync(filePath, 50, requireExclusive);
+  return withStateFileLockAtPathSync(`${filePath}.mutation.lock`, callback, requireExclusive);
+}
+
+export function withStateFileLockAtPathSync(lockPath, callback, requireExclusive = false) {
+  const lock = acquireStateFileLockAtPathSync(lockPath, 50, requireExclusive);
   if (!lock) return { acquired: false, value: undefined };
   let value;
   let releaseFailed = false;

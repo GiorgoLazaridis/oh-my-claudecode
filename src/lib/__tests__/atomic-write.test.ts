@@ -18,7 +18,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getProcessStartIdentitySync } from '../../platform/process-utils.js';
 // @ts-expect-error Hook runtime source is intentionally JavaScript-only.
-import { withStateFileLockSync } from '../../../scripts/lib/atomic-write.mjs';
+import { withStateFileLockAtPathSync, withStateFileLockSync } from '../../../scripts/lib/atomic-write.mjs';
 
 import { tmpdir } from 'os';
 
@@ -332,6 +332,36 @@ describe('atomicWriteJson', () => {
 
     expect(withStateFileLockSync(filePath, () => 'written')).toEqual({ acquired: false, value: undefined });
     expect(existsSync(`${filePath}.mutation.lock`)).toBe(true);
+  });
+
+  it('reclaims an exact-path lock whose PID has been reused', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-reused-pid-'));
+    directories.push(directory);
+    process.env.NODE_ENV = 'test';
+    process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
+    const lockPath = join(directory, 'last-tool-error.json.lock');
+    writeFileSync(lockPath, JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      processStart: 'previous-process-start',
+      createdAt: new Date().toISOString(),
+      nonce: randomUUID(),
+    }));
+
+    expect(withStateFileLockAtPathSync(lockPath, () => 'written')).toEqual({ acquired: true, value: 'written' });
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('eventually reclaims a legacy lock after its finite age limit', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-legacy-'));
+    directories.push(directory);
+    process.env.NODE_ENV = 'test';
+    process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
+    const lockPath = join(directory, 'last-tool-error.json.lock');
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, timestamp: Date.now() - 31_000 }));
+
+    expect(withStateFileLockAtPathSync(lockPath, () => 'written')).toEqual({ acquired: true, value: 'written' });
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
 

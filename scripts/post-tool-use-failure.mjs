@@ -4,10 +4,10 @@
 // Writes last-tool-error-state.json (session-scoped) or last-tool-error.json (legacy)
 // with tool name, input preview, error, and retry count
 
-import { existsSync, readFileSync, mkdirSync, openSync, closeSync, unlinkSync, writeSync, statSync, constants as fsConstants } from 'fs';
-import { join, sep, resolve, dirname } from 'path';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
+import { join, sep, resolve } from 'path';
 import { readStdin } from './lib/stdin.mjs';
-import { atomicWriteFileSync, ensureDirSync } from './lib/atomic-write.mjs';
+import { atomicWriteFileSync, withStateFileLockAtPathSync } from './lib/atomic-write.mjs';
 import { resolveOmcStateRoot } from './lib/state-root.mjs';
 
 // ============================================================================
@@ -59,133 +59,10 @@ function validateSessionId(sessionId) {
   return sessionId;
 }
 
-// ============================================================================
-// Inline file lock (mirrors src/lib/file-lock.ts — O_CREAT|O_EXCL pattern)
-// No TS import available in .mjs; implement the same algorithm inline.
-// NOTE: This block is intentionally duplicated in templates/hooks/post-tool-use-failure.mjs.
-// No shared .mjs helper exists for hooks; do not factor out without first creating one.
-// ============================================================================
-
-const LOCK_STALE_MS = 30_000;
-const LOCK_RETRY_DELAY_MS = 50;
-const LOCK_TIMEOUT_MS = 2_000;
-
-/**
- * Derive lock file path for a given data file.
- * @param {string} filePath
- * @returns {string}
- */
-function lockPathFor(filePath) {
-  return filePath + '.lock';
-}
-
-/**
- * Check whether an existing lock file is stale (old + dead PID).
- * @param {string} lockPath
- * @returns {boolean}
- */
-function isLockStale(lockPath) {
-  try {
-    const stat = statSync(lockPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs < LOCK_STALE_MS) return false;
-    try {
-      const raw = readFileSync(lockPath, 'utf-8');
-      const payload = JSON.parse(raw);
-      if (payload.pid) {
-        // Check if process is alive: sending signal 0 throws if dead
-        try { process.kill(payload.pid, 0); return false; } catch { /* dead */ }
-      }
-    } catch { /* malformed — stale if old enough */ }
-    return true;
-  } catch {
-    return false; // disappeared
-  }
-}
-
-/**
- * Try to acquire the lock once (single O_CREAT|O_EXCL attempt).
- * @param {string} lockPath
- * @returns {{fd: number, path: string}|null}
- */
-function tryAcquireLockSync(lockPath) {
-  ensureDirSync(dirname(lockPath));
-  try {
-    const fd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
-    try {
-      writeSync(fd, JSON.stringify({ pid: process.pid, timestamp: Date.now() }), null, 'utf-8');
-    } catch (writeErr) {
-      try { closeSync(fd); } catch { /* ignore */ }
-      try { unlinkSync(lockPath); } catch { /* ignore */ }
-      throw writeErr;
-    }
-    return { fd, path: lockPath };
-  } catch (err) {
-    if (err && err.code === 'EEXIST') {
-      if (isLockStale(lockPath)) {
-        try { unlinkSync(lockPath); } catch { /* another process reaped it */ }
-        // One retry after reaping
-        try {
-          const fd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
-          try {
-            writeSync(fd, JSON.stringify({ pid: process.pid, timestamp: Date.now() }), null, 'utf-8');
-          } catch (writeErr) {
-            try { closeSync(fd); } catch { /* ignore */ }
-            try { unlinkSync(lockPath); } catch { /* ignore */ }
-            throw writeErr;
-          }
-          return { fd, path: lockPath };
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    }
-    throw err;
-  }
-}
-
-/**
- * Release a previously acquired lock handle.
- * @param {{fd: number, path: string}} handle
- */
-function releaseLockSync(handle) {
-  try { closeSync(handle.fd); } catch { /* ignore */ }
-  try { unlinkSync(handle.path); } catch { /* ignore */ }
-}
-
-/**
- * Execute fn while holding an exclusive file lock.
- * Falls back to executing fn without a lock if lock cannot be acquired
- * (hook must never fail silently).
- *
- * @param {string} lockPath
- * @param {() => void} fn
- */
-function withFileLockSync(lockPath, fn) {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  let handle = tryAcquireLockSync(lockPath);
-
-  if (!handle) {
-    // Retry loop using synchronous spin (main thread — Atomics.wait not available)
-    while (!handle && Date.now() < deadline) {
-      const waitUntil = Math.min(Date.now() + LOCK_RETRY_DELAY_MS, deadline);
-      while (Date.now() < waitUntil) { /* spin */ }
-      handle = tryAcquireLockSync(lockPath);
-    }
-  }
-
-  if (!handle) {
-    // Could not acquire lock — proceed without lock rather than dropping the write
-    fn();
-    return;
-  }
-
-  try {
-    fn();
-  } finally {
-    releaseLockSync(handle);
-  }
+// Use the same process-identity-aware state lock as the cleanup hook.
+function withFileLockSync(filePath, fn) {
+  const result = withStateFileLockAtPathSync(`${filePath}.lock`, fn, true);
+  if (!result.acquired) fn();
 }
 
 // ============================================================================
@@ -434,13 +311,11 @@ async function main() {
       try { mkdirSync(stateDir, { recursive: true }); } catch {}
     }
 
-    const lockPath = lockPathFor(statePath);
-
     // Hoist retryCount so it is accessible for guidance generation after the lock
     let retryCount = 1;
 
     // Read-compute-write under lock to prevent concurrent retryCount corruption
-    withFileLockSync(lockPath, () => {
+    withFileLockSync(statePath, () => {
       // Read existing state and calculate retry count
       const existingState = readErrorState(statePath);
       const currentTime = Date.now();

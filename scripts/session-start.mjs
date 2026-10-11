@@ -6,7 +6,7 @@
  * Cross-platform: Windows, macOS, Linux
  */
 
-import { existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync, statSync, openSync, closeSync, writeSync, constants as fsConstants } from 'fs';
+import { existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync, statSync } from 'fs';
 import { spawn } from 'child_process';
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'path';
 import { homedir } from 'os';
@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { getClaudeConfigDir, getUpdateCheckCachePath } from './lib/config-dir.mjs';
 import { resolveOmcStateRoot } from './lib/state-root.mjs';
 import { pathIdentity, publishCacheOccupancy, readOccupiedPluginRoots } from './lib/cache-occupancy.mjs';
+import { acquireStateFileLockAtPathSync, releaseStateFileLockSync } from './lib/state-lock.mjs';
 
 // Detached update-cache refresh: argv flag and the child's overall deadline.
 const REFRESH_UPDATE_CACHE_FLAG = '--refresh-update-cache';
@@ -127,73 +128,14 @@ function purgeToolFailureTemps(directory) {
   }
 }
 
-const POST_TOOL_FAILURE_LOCK_STALE_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_WAIT_MS = 2500;
 const POST_TOOL_FAILURE_DEFERRED_WAIT_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_RETRY_MS = 50;
 const DEFERRED_TOOL_FAILURE_CLEANUP_FLAG = '--purge-legacy-tool-failure-state';
 
-function isPostToolFailureLockStale(path) {
-  try {
-    const stats = lstatSync(path);
-    if (!stats.isFile()) return false;
-    try {
-      const owner = JSON.parse(readFileSync(path, 'utf-8'));
-      if (Number.isSafeInteger(owner.pid) && owner.pid > 0) {
-        try {
-          process.kill(owner.pid, 0);
-          return false;
-        } catch (error) {
-          if (error?.code === 'ESRCH') return true;
-          return false;
-        }
-      }
-    } catch {}
-    return Date.now() - stats.mtimeMs >= POST_TOOL_FAILURE_LOCK_STALE_MS;
-  } catch {
-    return false;
-  }
-}
-
-function createPostToolFailureLock(path) {
-  let fd;
-  try {
-    fd = openSync(path, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
-    writeSync(fd, JSON.stringify({ pid: process.pid, timestamp: Date.now() }), null, 'utf-8');
-    return { fd, path };
-  } catch (error) {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch {}
-      try { unlinkSync(path); } catch {}
-    }
-    throw error;
-  }
-}
-
-function tryAcquirePostToolFailureLock(canonicalPath) {
-  const path = `${canonicalPath}.lock`;
-  try {
-    return createPostToolFailureLock(path);
-  } catch (error) {
-    if (error?.code !== 'EEXIST') throw error;
-    if (!isPostToolFailureLockStale(path)) return null;
-    try {
-      unlinkSync(path);
-    } catch (unlinkError) {
-      if (unlinkError?.code !== 'ENOENT') throw unlinkError;
-    }
-    try {
-      return createPostToolFailureLock(path);
-    } catch (retryError) {
-      if (retryError?.code !== 'EEXIST') throw retryError;
-      return null;
-    }
-  }
-}
-
 async function waitForPostToolFailureLock(canonicalPath, deadline) {
   while (Date.now() < deadline) {
-    const lock = tryAcquirePostToolFailureLock(canonicalPath);
+    const lock = acquireStateFileLockAtPathSync(`${canonicalPath}.lock`, 1, true);
     if (lock) return lock;
     const remaining = deadline - Date.now();
     if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(POST_TOOL_FAILURE_LOCK_RETRY_MS, remaining)));
@@ -202,8 +144,7 @@ async function waitForPostToolFailureLock(canonicalPath, deadline) {
 }
 
 function releasePostToolFailureLock(lock) {
-  try { closeSync(lock.fd); } catch {}
-  try { unlinkSync(lock.path); } catch {}
+  releaseStateFileLockSync(lock);
 }
 
 function hasToolFailureArtifacts(directory, canonicalFilename) {
