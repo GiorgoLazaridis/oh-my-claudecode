@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'node:url';
 import { getProcessStartIdentitySync } from '../../platform/process-utils.js';
 // @ts-expect-error Hook runtime source is intentionally JavaScript-only.
-import { acquireStateFileLockAtPathSync, getStateFileLockFailureKind, withStateFileLockAtPathSync, withStateFileLockSync } from '../../../scripts/lib/atomic-write.mjs';
+import { acquireStateFileLockAtPathSync, getStateFileLockFailureKind, releaseStateFileLockSync, withStateFileLockAtPathSync, withStateFileLockSync } from '../../../scripts/lib/atomic-write.mjs';
 
 import { tmpdir } from 'os';
 
@@ -438,6 +438,31 @@ describe('atomicWriteJson', () => {
     expect(JSON.parse(output)).toEqual({ result: { acquired: false }, lockExists: true });
   });
 
+  it.skipIf(process.platform !== 'linux')('bounds Windows process-start probes by the supplied timeout', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-process-probe-timeout-'));
+    directories.push(directory);
+    const powershell = join(directory, 'powershell');
+    const stateLockUrl = pathToFileURL(join(__dirname, '..', '..', '..', 'scripts', 'lib', 'state-lock.mjs')).href;
+    writeFileSync(powershell, '#!/bin/sh\nwhile :; do :; done\n');
+    chmodSync(powershell, 0o755);
+    const script = `
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      const { processStartIdentity } = await import(process.argv[1]);
+      const startedAt = Date.now();
+      const identity = processStartIdentity(process.pid, 75);
+      process.stdout.write(JSON.stringify({ identity, elapsedMs: Date.now() - startedAt }));
+    `;
+
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', script, stateLockUrl], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_ENV: 'test', PATH: directory },
+      timeout: 1000,
+    });
+
+    expect(JSON.parse(output)).toMatchObject({ identity: null });
+    expect(JSON.parse(output).elapsedMs).toBeLessThan(500);
+  });
+
   it('bounds SQLite lock contention by the caller-provided busy timeout', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-sqlite-timeout-'));
     directories.push(directory);
@@ -488,6 +513,78 @@ describe('atomicWriteJson', () => {
         await new Promise<void>(resolve => holder.once('exit', () => resolve()));
       }
     }
+  });
+
+  it('recovers SQLite lock release after contention', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-release-contention-'));
+    directories.push(directory);
+    const stateDirectory = join(directory, 'state');
+    mkdirSync(stateDirectory);
+    const lockPath = join(stateDirectory, 'last-tool-error.json.lock');
+    const contendedLockPath = join(stateDirectory, 'other-state.json.lock');
+    const databasePath = join(stateDirectory, '.state-mutation-locks.db');
+    const heldLock = acquireStateFileLockAtPathSync(lockPath, 1, true, false, 75);
+    expect(heldLock).not.toBeNull();
+    const script = `
+      import Database from 'better-sqlite3';
+      const database = new Database(process.argv[1]);
+      database.pragma('journal_mode = WAL');
+      database.exec('CREATE TABLE IF NOT EXISTS state_mutation_locks (lock_key TEXT PRIMARY KEY, version INTEGER NOT NULL, pid INTEGER NOT NULL, process_start TEXT NOT NULL, created_at TEXT NOT NULL, nonce TEXT NOT NULL)');
+      database.exec('BEGIN IMMEDIATE');
+      process.stdout.write('locked\\n');
+      process.stdin.once('end', () => { database.exec('ROLLBACK'); database.close(); });
+      process.stdin.resume();
+    `;
+    const holder = spawn(process.execPath, ['--input-type=module', '-e', script, databasePath], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let releaseAttempted = false;
+    let ready = false;
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      holder.stdout?.on('data', chunk => {
+        if (String(chunk).includes('locked')) {
+          ready = true;
+          resolve();
+        }
+      });
+      holder.stderr?.on('data', chunk => {
+        if (!ready) reject(new Error(String(chunk)));
+      });
+      holder.once('error', reject);
+      holder.once('exit', code => {
+        if (!ready) reject(new Error(`SQLite lock holder exited before acquiring its transaction (${code})`));
+      });
+    });
+
+    try {
+      await readyPromise;
+      const startedAt = Date.now();
+      const lock = acquireStateFileLockAtPathSync(contendedLockPath, 1, true, false, 75);
+      expect(lock).toBeNull();
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(getStateFileLockFailureKind()).toBe('contention');
+      releaseAttempted = true;
+      expect(releaseStateFileLockSync(heldLock)).toBe(false);
+      expect(existsSync(lockPath)).toBe(true);
+    } finally {
+      holder.stdin?.end();
+      if (holder.exitCode === null && holder.signalCode === null) {
+        await new Promise<void>(resolve => holder.once('exit', () => resolve()));
+      }
+      if (existsSync(lockPath)) {
+        if (releaseAttempted) {
+          const recoveredLock = acquireStateFileLockAtPathSync(lockPath, 1, true, false, 75);
+          if (recoveredLock) releaseStateFileLockSync(recoveredLock);
+        } else {
+          releaseStateFileLockSync(heldLock);
+        }
+      }
+    }
+
+    const recoveredLock = acquireStateFileLockAtPathSync(lockPath, 1, true, false, 75);
+    expect(recoveredLock).not.toBeNull();
+    expect(releaseStateFileLockSync(recoveredLock)).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
   });
 
   it('keeps a live legacy owner lock after thirty seconds', () => {

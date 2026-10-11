@@ -191,7 +191,6 @@ jobs:
       - name: Run Unix state-lock tests
         if: runner.os != 'Windows'
         run: npx vitest run src/lib/__tests__/atomic-write.test.ts
-          src/lib/__tests__/atomic-write.test.ts
 
   build:
     name: Build

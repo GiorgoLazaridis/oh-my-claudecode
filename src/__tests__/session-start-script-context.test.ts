@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -680,6 +680,36 @@ describe('session-start.mjs regression #1386', () => {
     expect(existsSync(customRootRecord)).toBe(false);
     expect(existsSync(customSessionRecord)).toBe(false);
     expect(existsSync(otherWorkspaceRecord)).toBe(true);
+  });
+
+  it('publishes plugin occupancy before deferring no-workspace cleanup', () => {
+    const pluginRoot = join(tempDir, 'plugins', 'cache', 'omc', 'current');
+    const configDir = join(tempDir, 'claude-config');
+    const registryDir = join(configDir, '.omc', 'cache-occupancy');
+    mkdirSync(pluginRoot, { recursive: true });
+
+    const output = JSON.parse(execFileSync(NODE, [SCRIPT_PATH], {
+      input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'session-no-workspace-plugin', cwd: tempDir }),
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+        CLAUDE_CONFIG_DIR: configDir,
+        CLAUDE_PLUGIN_ROOT: pluginRoot,
+        OMC_SESSION_OWNER_PID: String(process.pid),
+        OMC_STATE_DIR: '',
+        OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '0',
+        NODE_ENV: 'test',
+      },
+      timeout: 15000,
+    }));
+
+    expect(output.continue).toBe(true);
+    const records = readdirSync(registryDir).map(name => JSON.parse(readFileSync(join(registryDir, name), 'utf-8')));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ pid: process.pid, pluginRoot });
+    expect(records[0].processStartIdentity).toEqual(expect.any(String));
   });
 
   it.skipIf(process.platform === 'win32')('does not follow symlinked session directories or state files', () => {

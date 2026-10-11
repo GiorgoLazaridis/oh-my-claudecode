@@ -129,6 +129,10 @@ function purgeToolFailureTemps(directory) {
 
 const POST_TOOL_FAILURE_LOCK_WAIT_MS = 2500;
 const POST_TOOL_FAILURE_SQLITE_BUSY_WAIT_MS = 100;
+const POST_TOOL_FAILURE_PROCESS_PROBE_MAX_MS = 2000;
+const SESSION_START_HOOK_TIMEOUT_MS = 5000;
+const SESSION_START_OCCUPANCY_PROBE_MAX_MS = 2000;
+const SESSION_START_OUTPUT_RESERVE_MS = 750;
 const POST_TOOL_FAILURE_DEFERRED_WAIT_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_RETRY_MS = 50;
 const DEFERRED_TOOL_FAILURE_CLEANUP_FLAG = '--purge-legacy-tool-failure-state';
@@ -151,7 +155,9 @@ async function waitForPostToolFailureLock(canonicalPath, deadline) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { lock: null, timedOut: true };
     const lock = acquireStateFileLockAtPathSync(
-      `${canonicalPath}.lock`, 1, true, false, Math.min(POST_TOOL_FAILURE_SQLITE_BUSY_WAIT_MS, remaining),
+      `${canonicalPath}.lock`, 1, true, false,
+      Math.min(POST_TOOL_FAILURE_SQLITE_BUSY_WAIT_MS, remaining),
+      Math.min(POST_TOOL_FAILURE_PROCESS_PROBE_MAX_MS, remaining),
     );
     if (lock) return { lock, timedOut: false };
     if (getStateFileLockFailureKind() !== 'contention') return { lock: null, timedOut: false };
@@ -164,7 +170,7 @@ async function waitForPostToolFailureLock(canonicalPath, deadline) {
 }
 
 function releasePostToolFailureLock(lock) {
-  postToolFailureStateLockModule.releaseStateFileLockSync(lock);
+  return postToolFailureStateLockModule.releaseStateFileLockSync(lock);
 }
 
 function hasToolFailureArtifacts(directory, canonicalFilename) {
@@ -192,13 +198,14 @@ async function purgeToolFailureStateDirectory(directory, canonicalFilename, dead
   }
   postToolFailureLock = lockWait.lock;
   if (!postToolFailureLock) return lockWait.timedOut;
+  let releaseFailed = false;
   try {
     purgeLegacyToolFailureFile(canonicalPath);
     purgeToolFailureTemps(directory);
   } finally {
-    releasePostToolFailureLock(postToolFailureLock);
+    releaseFailed = !releasePostToolFailureLock(postToolFailureLock);
   }
-  return false;
+  return releaseFailed;
 }
 
 function deferLegacyToolFailureCleanup(omcRoot, waitMs = POST_TOOL_FAILURE_DEFERRED_WAIT_MS) {
@@ -301,6 +308,22 @@ function hasActiveOlderPluginRoot() {
   } catch {
     return false;
   }
+}
+
+function resolveSessionPluginOccupancy(deadline) {
+  if (!process.env.CLAUDE_PLUGIN_ROOT) return null;
+  const configuredOwnerPid = Number(process.env.OMC_SESSION_OWNER_PID);
+  const ownerPid = Number.isSafeInteger(configuredOwnerPid) && configuredOwnerPid > 1 ? configuredOwnerPid : process.ppid;
+  const probeTimeoutMs = Math.max(
+    0,
+    Math.min(
+      SESSION_START_OCCUPANCY_PROBE_MAX_MS,
+      deadline - Date.now() - SESSION_START_OUTPUT_RESERVE_MS,
+    ),
+  );
+  const occupancy = readOccupiedPluginRoots(configDir, { includePids: [ownerPid], probeTimeoutMs });
+  publishCacheOccupancy(process.env.CLAUDE_PLUGIN_ROOT, configDir, ownerPid, occupancy.identities.get(ownerPid) ?? null);
+  return occupancy;
 }
 
 async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
@@ -1406,6 +1429,7 @@ async function checkHudInstallation(retryCount = 0) {
 
 // Main
 async function main() {
+  const sessionStartDeadline = Date.now() + SESSION_START_HOOK_TIMEOUT_MS;
   try {
     const input = await readStdin();
     let data = {};
@@ -1423,6 +1447,7 @@ async function main() {
         const unscopedOmcRoot = process.env.OMC_STATE_DIR
           ? resolve(process.env.OMC_STATE_DIR, 'non-git')
           : join(homedir(), '.omc');
+        resolveSessionPluginOccupancy(sessionStartDeadline);
         await purgeLegacyToolFailureState(unscopedOmcRoot);
         deferToolFailureCleanupStabilization(unscopedOmcRoot);
       } catch {
@@ -1483,10 +1508,7 @@ async function main() {
       // path) runs a single time; its identities map feeds the owner publish
       // below and the stale-cache GC scan further down. `includePids` covers
       // the configured owner even before its own record exists.
-      const configuredOwnerPid = Number(process.env.OMC_SESSION_OWNER_PID);
-      const ownerPid = Number.isSafeInteger(configuredOwnerPid) && configuredOwnerPid > 1 ? configuredOwnerPid : process.ppid;
-      occupancyResolution = readOccupiedPluginRoots(configDir, { includePids: [ownerPid] });
-      publishCacheOccupancy(process.env.CLAUDE_PLUGIN_ROOT, configDir, ownerPid, occupancyResolution.identities.get(ownerPid));
+      occupancyResolution = resolveSessionPluginOccupancy(sessionStartDeadline);
     }
     reconcileAbandonedSessionStarts(omcRoot, sessionId);
     reconcileSessionEndJobsInBackground(getRuntimeBaseDir(), directory);
