@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -112,6 +112,15 @@ function startSessionStartProcess(
   });
   child.stdin.end(JSON.stringify(input));
   return { child, output };
+}
+
+async function waitForFilesToDisappear(paths: string[], timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (paths.every(path => !existsSync(path))) return true;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return paths.every(path => !existsSync(path));
 }
 
 describe('session-start template retired-state handling', () => {
@@ -291,38 +300,66 @@ describe('session-start template retired-state handling', () => {
     }
   });
 
-  it('gives session-state cleanup its own retry window after a locked root state', async () => {
+  it('defers cleanup for locked root and session state within the SessionStart timeout', async () => {
     const stateDir = join(fakeProject, '.omc', 'state');
     const sessionDir = join(stateDir, 'sessions', 'session-locked');
     mkdirSync(sessionDir, { recursive: true });
-    const rootHolder = startPostToolFailureLockHolder(join(stateDir, 'last-tool-error.json'));
-    const sessionHolder = startPostToolFailureLockHolder(join(sessionDir, 'last-tool-error-state.json'));
+    const rootPath = join(stateDir, 'last-tool-error.json');
+    const sessionPath = join(sessionDir, 'last-tool-error-state.json');
+    const rootTemp = join(stateDir, `.last-tool-error.json.tmp.${randomUUID()}`);
     const sessionTemp = join(sessionDir, `.last-tool-error-state.json.tmp.${randomUUID()}`);
+    const cleanupPaths = [rootPath, rootTemp, sessionPath, sessionTemp];
+    const rootHolder = startPostToolFailureLockHolder(rootPath);
+    const sessionHolder = startPostToolFailureLockHolder(sessionPath);
     let sessionStart: ReturnType<typeof startSessionStartProcess> | undefined;
 
     try {
       await Promise.all([rootHolder.ready, sessionHolder.ready]);
+      const startedAt = Date.now();
       sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
         hook_event_name: 'SessionStart',
         session_id: 'session-current',
         cwd: fakeProject,
-      }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+      }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '', OMC_HOOK_BACKGROUND_CHILD: '0' });
       await new Promise(resolve => setTimeout(resolve, 250));
+      writeFileSync(rootPath, JSON.stringify({ tool_input_preview: 'root legacy payload', error: 'legacy root error' }));
+      writeFileSync(rootTemp, '{"tool_input_preview":"root legacy temp"');
+      writeFileSync(sessionPath, JSON.stringify({ tool_input_preview: 'session legacy payload', error: 'legacy session error' }));
       writeFileSync(sessionTemp, '{"tool_input_preview":"session legacy payload"');
-
-      await new Promise(resolve => setTimeout(resolve, 2600));
-      expect(sessionStart.child.exitCode).toBe(null);
-      expect(existsSync(sessionTemp)).toBe(true);
-      expect(await rootHolder.release()).toEqual({ code: 0, signal: null });
-      await new Promise(resolve => setTimeout(resolve, 250));
-      expect(sessionStart.child.exitCode).toBe(null);
-      expect(await sessionHolder.release()).toEqual({ code: 0, signal: null });
 
       const output = JSON.parse(await sessionStart.output);
       expect(output.continue).toBe(true);
-      expect(existsSync(sessionTemp)).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(5000);
+      expect(cleanupPaths.every(path => existsSync(path))).toBe(true);
+      expect(await rootHolder.release()).toEqual({ code: 0, signal: null });
+      expect(await sessionHolder.release()).toEqual({ code: 0, signal: null });
+      expect(await waitForFilesToDisappear(cleanupPaths, 5000)).toBe(true);
     } finally {
       await Promise.all([rootHolder.release(), sessionHolder.release()]);
+      if (sessionStart) await sessionStart.output.catch(() => '');
+    }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('returns promptly when failure-state lock creation is denied', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const legacyPath = join(stateDir, 'last-tool-error.json');
+    writeFileSync(legacyPath, JSON.stringify({ tool_input_preview: 'read-only legacy secret' }));
+    chmodSync(stateDir, 0o555);
+    let sessionStart: ReturnType<typeof startSessionStartProcess> | undefined;
+
+    try {
+      const startedAt = Date.now();
+      sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+        hook_event_name: 'SessionStart',
+        session_id: 'session-current',
+        cwd: fakeProject,
+      }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '', OMC_HOOK_BACKGROUND_CHILD: '0' });
+      const output = JSON.parse(await sessionStart.output);
+      expect(output.continue).toBe(true);
+      expect(Date.now() - startedAt).toBeLessThan(5000);
+      expect(existsSync(legacyPath)).toBe(true);
+    } finally {
+      chmodSync(stateDir, 0o755);
       if (sessionStart) await sessionStart.output.catch(() => '');
     }
   });

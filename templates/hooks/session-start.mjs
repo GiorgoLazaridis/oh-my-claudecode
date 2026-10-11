@@ -123,7 +123,9 @@ function purgeToolFailureTemps(directory) {
 
 const POST_TOOL_FAILURE_LOCK_STALE_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_WAIT_MS = 2500;
+const POST_TOOL_FAILURE_DEFERRED_WAIT_MS = 30_000;
 const POST_TOOL_FAILURE_LOCK_RETRY_MS = 50;
+const DEFERRED_TOOL_FAILURE_CLEANUP_FLAG = '--purge-legacy-tool-failure-state';
 
 function isPostToolFailureLockStale(path) {
   try {
@@ -167,32 +169,30 @@ function tryAcquirePostToolFailureLock(canonicalPath) {
   try {
     return createPostToolFailureLock(path);
   } catch (error) {
-    if (error?.code !== 'EEXIST' || !isPostToolFailureLockStale(path)) return null;
-    try { unlinkSync(path); } catch {}
-    try { return createPostToolFailureLock(path); } catch { return null; }
-  }
-}
-
-function hasActivePostToolFailureLock(path) {
-  try {
-    return lstatSync(path).isFile() && !isPostToolFailureLockStale(path);
-  } catch {
-    return false;
+    if (error?.code !== 'EEXIST') throw error;
+    if (!isPostToolFailureLockStale(path)) return null;
+    try {
+      unlinkSync(path);
+    } catch (unlinkError) {
+      if (unlinkError?.code !== 'ENOENT') throw unlinkError;
+    }
+    try {
+      return createPostToolFailureLock(path);
+    } catch (retryError) {
+      if (retryError?.code !== 'EEXIST') throw retryError;
+      return null;
+    }
   }
 }
 
 async function waitForPostToolFailureLock(canonicalPath, deadline) {
-  const path = `${canonicalPath}.lock`;
-  while (true) {
+  while (Date.now() < deadline) {
     const lock = tryAcquirePostToolFailureLock(canonicalPath);
     if (lock) return lock;
-    if (!hasActivePostToolFailureLock(path)) {
-      if (!existsSync(path)) continue;
-      return null;
-    }
-    if (Date.now() >= deadline) return null;
-    await new Promise(resolve => setTimeout(resolve, POST_TOOL_FAILURE_LOCK_RETRY_MS));
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(POST_TOOL_FAILURE_LOCK_RETRY_MS, remaining)));
   }
+  return null;
 }
 
 function releasePostToolFailureLock(lock) {
@@ -210,28 +210,50 @@ function hasToolFailureArtifacts(directory, canonicalFilename) {
   }
 }
 
-async function purgeToolFailureStateDirectory(directory, canonicalFilename) {
-  if (!hasToolFailureArtifacts(directory, canonicalFilename)) return;
+async function purgeToolFailureStateDirectory(directory, canonicalFilename, deadline) {
+  if (!hasToolFailureArtifacts(directory, canonicalFilename)) return false;
   const canonicalPath = join(directory, canonicalFilename);
-  const postToolFailureLock = await waitForPostToolFailureLock(canonicalPath, Date.now() + POST_TOOL_FAILURE_LOCK_WAIT_MS);
-  if (!postToolFailureLock) return;
+  let postToolFailureLock;
+  try {
+    postToolFailureLock = await waitForPostToolFailureLock(canonicalPath, deadline);
+  } catch {
+    return false;
+  }
+  if (!postToolFailureLock) return true;
   try {
     purgeLegacyToolFailureFile(canonicalPath);
     purgeToolFailureTemps(directory);
   } finally {
     releasePostToolFailureLock(postToolFailureLock);
   }
+  return false;
 }
 
-async function purgeLegacyToolFailureState(omcRoot) {
+function deferLegacyToolFailureCleanup(omcRoot) {
+  try {
+    const child = spawn(process.execPath, [__filename, DEFERRED_TOOL_FAILURE_CLEANUP_FLAG, omcRoot], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, OMC_HOOK_BACKGROUND_CHILD: '1' },
+    });
+    child.on('error', () => {});
+    child.unref();
+  } catch {
+    // Deferred cleanup is best-effort and must not delay SessionStart output.
+  }
+}
+
+async function purgeLegacyToolFailureState(omcRoot, waitMs = POST_TOOL_FAILURE_LOCK_WAIT_MS, deferOnTimeout = true) {
+  const deadline = Date.now() + waitMs;
   const stateDir = join(omcRoot, 'state');
   try {
-    if (!lstatSync(stateDir).isDirectory()) return;
+    if (!lstatSync(stateDir).isDirectory()) return false;
   } catch {
-    return;
+    return false;
   }
 
-  await purgeToolFailureStateDirectory(stateDir, 'last-tool-error.json');
+  const directories = [[stateDir, 'last-tool-error.json']];
   const sessionsDir = join(stateDir, 'sessions');
   let sessions;
   try {
@@ -243,12 +265,17 @@ async function purgeLegacyToolFailureState(omcRoot) {
   for (const sessionId of sessions) {
     const sessionDir = join(sessionsDir, sessionId);
     try {
-      if (!lstatSync(sessionDir).isDirectory()) continue;
-      await purgeToolFailureStateDirectory(sessionDir, 'last-tool-error-state.json');
+      if (lstatSync(sessionDir).isDirectory()) directories.push([sessionDir, 'last-tool-error-state.json']);
     } catch {
       // Skip inaccessible or replaced session directories.
     }
   }
+
+  const cleanupPending = (await Promise.all(
+    directories.map(([directory, filename]) => purgeToolFailureStateDirectory(directory, filename, deadline)),
+  )).some(Boolean);
+  if (cleanupPending && deferOnTimeout) deferLegacyToolFailureCleanup(omcRoot);
+  return cleanupPending;
 }
 
 function writeJsonFile(path, data) {
@@ -1041,6 +1068,14 @@ ${agentsContent}
 
 if (process.argv.includes(REFRESH_UPDATE_CACHE_FLAG)) {
   refreshUpdateCacheAndExit();
+} else if (process.argv[2] === DEFERRED_TOOL_FAILURE_CLEANUP_FLAG) {
+  const omcRoot = process.argv[3];
+  if (!omcRoot) {
+    process.exit(0);
+  }
+  purgeLegacyToolFailureState(omcRoot, POST_TOOL_FAILURE_DEFERRED_WAIT_MS, false)
+    .catch(() => {})
+    .finally(() => process.exit(0));
 } else {
   main();
 }
