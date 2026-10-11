@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync, utimesSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -93,6 +94,108 @@ describe('session-start template retired-state handling', () => {
     expect(existsSync(legacySessionError)).toBe(false);
     expect(existsSync(join(oldSessionDir, 'session-started.json'))).toBe(false);
     expect(readFileSync(unrelatedState, 'utf-8')).toBe('preserve this state');
+  });
+
+  it('preserves sanitized canonical tool-failure records and their retry counts', () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const sessionDir = join(stateDir, 'sessions', 'session-retry-state');
+    mkdirSync(sessionDir, { recursive: true });
+    const rootPath = join(stateDir, 'last-tool-error.json');
+    const sessionPath = join(sessionDir, 'last-tool-error-state.json');
+    const rootState = {
+      tool_name: 'Bash',
+      error: 'Tool execution failed (details omitted for privacy).',
+      timestamp: new Date().toISOString(),
+      retry_count: 4,
+    };
+    const sessionState = { ...rootState, retry_count: 7 };
+    writeFileSync(rootPath, JSON.stringify(rootState));
+    writeFileSync(sessionPath, JSON.stringify(sessionState));
+
+    const output = runSessionStart({
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+
+    expect(output.continue).toBe(true);
+    expect(JSON.parse(readFileSync(rootPath, 'utf-8'))).toEqual(rootState);
+    expect(JSON.parse(readFileSync(sessionPath, 'utf-8'))).toEqual(sessionState);
+  });
+
+  it('removes stale tool-failure atomic temps at root and session scope but retains fresh temps', () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const sessionDir = join(stateDir, 'sessions', 'session-temp-files');
+    mkdirSync(sessionDir, { recursive: true });
+    const stalePaths = [
+      join(stateDir, `.last-tool-error.json.tmp.${randomUUID()}`),
+      join(stateDir, `.last-tool-error-state.json.tmp.${randomUUID()}`),
+      join(sessionDir, `.last-tool-error.json.tmp.${randomUUID()}`),
+      join(sessionDir, `.last-tool-error-state.json.tmp.${randomUUID()}`),
+    ];
+    for (const path of stalePaths) writeFileSync(path, 'orphaned atomic temp');
+    const staleTime = new Date(Date.now() - 61_000);
+    for (const path of stalePaths) utimesSync(path, staleTime, staleTime);
+
+    const freshPath = join(stateDir, `.last-tool-error.json.tmp.${randomUUID()}`);
+    const unrelatedTempPath = join(stateDir, '.last-tool-error.json.tmp.not-a-uuid');
+    writeFileSync(freshPath, 'active atomic temp');
+    writeFileSync(unrelatedTempPath, 'not an atomic temp name');
+    utimesSync(unrelatedTempPath, staleTime, staleTime);
+
+    const output = runSessionStart({
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+
+    expect(output.continue).toBe(true);
+    for (const path of stalePaths) expect(existsSync(path)).toBe(false);
+    expect(existsSync(freshPath)).toBe(true);
+    expect(existsSync(unrelatedTempPath)).toBe(true);
+  });
+
+  it('purges legacy tool-failure state from the home root on no-workspace startup', () => {
+    const homeStateDir = join(fakeHome, '.omc', 'state');
+    const homeSessionDir = join(homeStateDir, 'sessions', 'session-old-home');
+    const otherWorkspaceRecord = join(fakeProject, '.omc', 'state', 'last-tool-error.json');
+    mkdirSync(homeSessionDir, { recursive: true });
+    const homeRootRecord = join(homeStateDir, 'last-tool-error.json');
+    const homeSessionRecord = join(homeSessionDir, 'last-tool-error-state.json');
+    writeFileSync(homeRootRecord, JSON.stringify({ tool_input_preview: 'legacy home secret' }));
+    writeFileSync(homeSessionRecord, JSON.stringify({ tool_input_preview: 'legacy home session secret' }));
+    writeFileSync(otherWorkspaceRecord, JSON.stringify({ tool_input_preview: 'unrelated workspace secret' }));
+
+    const output = runSessionStart({
+      hook_event_name: 'SessionStart',
+      session_id: 'session-no-workspace',
+      cwd: tempDir,
+    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+
+    expect(output.continue).toBe(true);
+    expect(existsSync(homeRootRecord)).toBe(false);
+    expect(existsSync(homeSessionRecord)).toBe(false);
+    expect(existsSync(otherWorkspaceRecord)).toBe(true);
+
+    const customRoot = join(tempDir, 'custom-state');
+    const customStateDir = join(customRoot, 'non-git', 'state');
+    const customSessionDir = join(customStateDir, 'sessions', 'session-old-custom');
+    mkdirSync(customSessionDir, { recursive: true });
+    const customRootRecord = join(customStateDir, 'last-tool-error.json');
+    const customSessionRecord = join(customSessionDir, 'last-tool-error-state.json');
+    writeFileSync(customRootRecord, JSON.stringify({ tool_input_preview: 'legacy custom-root secret' }));
+    writeFileSync(customSessionRecord, JSON.stringify({ tool_input_preview: 'legacy custom-session secret' }));
+
+    const customOutput = runSessionStart({
+      hook_event_name: 'SessionStart',
+      session_id: 'session-no-workspace-custom',
+      cwd: tempDir,
+    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: customRoot });
+
+    expect(customOutput.continue).toBe(true);
+    expect(existsSync(customRootRecord)).toBe(false);
+    expect(existsSync(customSessionRecord)).toBe(false);
+    expect(existsSync(otherWorkspaceRecord)).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('does not follow symlinked session directories or state files', () => {

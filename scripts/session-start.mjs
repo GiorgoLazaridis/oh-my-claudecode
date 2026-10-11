@@ -55,11 +55,72 @@ function readJsonFile(path) {
   }
 }
 
+const TOOL_FAILURE_TEMP_FILE_PATTERN = /^\.last-tool-error(?:-state)?\.json\.tmp\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const TOOL_FAILURE_TEMP_MIN_AGE_MS = 60_000;
+const SANITIZED_TOOL_FAILURE_ERROR = 'Tool execution failed (details omitted for privacy).';
+
 function unlinkRegularFile(path) {
   try {
     if (lstatSync(path).isFile()) unlinkSync(path);
   } catch {
     // Legacy-state cleanup is best-effort and must not affect SessionStart.
+  }
+}
+
+function isSanitizedToolFailureState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return false;
+  const keys = Object.keys(state).sort();
+  return keys.length === 4
+    && keys[0] === 'error'
+    && keys[1] === 'retry_count'
+    && keys[2] === 'timestamp'
+    && keys[3] === 'tool_name'
+    && typeof state.tool_name === 'string'
+    && state.tool_name.length > 0
+    && state.error === SANITIZED_TOOL_FAILURE_ERROR
+    && typeof state.timestamp === 'string'
+    && Number.isFinite(Date.parse(state.timestamp))
+    && Number.isInteger(state.retry_count);
+}
+
+function purgeLegacyToolFailureFile(path) {
+  let content;
+  try {
+    if (!lstatSync(path).isFile()) return;
+    content = readFileSync(path, 'utf-8');
+  } catch {
+    return;
+  }
+
+  let state;
+  try {
+    state = JSON.parse(content);
+  } catch {
+    unlinkRegularFile(path);
+    return;
+  }
+  if (!isSanitizedToolFailureState(state)) unlinkRegularFile(path);
+}
+
+function purgeStaleToolFailureTemps(directory) {
+  let entries;
+  try {
+    if (!lstatSync(directory).isDirectory()) return;
+    entries = readdirSync(directory);
+  } catch {
+    return;
+  }
+
+  const now = Date.now();
+  for (const name of entries) {
+    if (!TOOL_FAILURE_TEMP_FILE_PATTERN.test(name)) continue;
+    const path = join(directory, name);
+    try {
+      const stats = lstatSync(path);
+      if (stats.isFile() && now - stats.mtimeMs >= TOOL_FAILURE_TEMP_MIN_AGE_MS) unlinkSync(path);
+    } catch {
+      // A concurrent or inaccessible temp file must not affect SessionStart.
+    }
   }
 }
 
@@ -71,7 +132,8 @@ function purgeLegacyToolFailureState(omcRoot) {
     return;
   }
 
-  unlinkRegularFile(join(stateDir, 'last-tool-error.json'));
+  purgeLegacyToolFailureFile(join(stateDir, 'last-tool-error.json'));
+  purgeStaleToolFailureTemps(stateDir);
 
   const sessionsDir = join(stateDir, 'sessions');
   let sessions;
@@ -86,7 +148,8 @@ function purgeLegacyToolFailureState(omcRoot) {
     const sessionDir = join(sessionsDir, sessionId);
     try {
       if (!lstatSync(sessionDir).isDirectory()) continue;
-      unlinkRegularFile(join(sessionDir, 'last-tool-error-state.json'));
+      purgeLegacyToolFailureFile(join(sessionDir, 'last-tool-error-state.json'));
+      purgeStaleToolFailureTemps(sessionDir);
     } catch {
       // Skip inaccessible or replaced session directories.
     }
@@ -1087,7 +1150,16 @@ async function main() {
       // No workspace here, but the registry update checks do not need one, so
       // the HUD update cache still refreshes for users who launch Claude Code
       // outside a repo. It runs detached: this path must answer immediately and
-      // must not touch any workspace or session state.
+      // must not touch workspace state. Only the home-scoped or configured
+      // non-git fallback can be touched here.
+      try {
+        const unscopedOmcRoot = process.env.OMC_STATE_DIR
+          ? resolve(process.env.OMC_STATE_DIR, 'non-git')
+          : join(homedir(), '.omc');
+        purgeLegacyToolFailureState(unscopedOmcRoot);
+      } catch {
+        // Legacy-state cleanup is best-effort on the no-workspace fast path.
+      }
       refreshUpdateCacheInBackground();
       console.log(JSON.stringify({ continue: true }));
       return;
