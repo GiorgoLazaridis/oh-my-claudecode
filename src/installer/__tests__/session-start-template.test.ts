@@ -538,6 +538,55 @@ describe('session-start template retired-state handling', () => {
     }
   });
 
+  it('waits for state-directory creation while an older plugin root is occupied', async () => {
+    const configDir = join(fakeHome, '.claude');
+    const pluginParent = join(tempDir, 'plugin-cache', 'oh-my-claudecode');
+    const currentPluginRoot = join(pluginParent, 'current');
+    const olderPluginRoot = join(pluginParent, 'older');
+    const registryDir = join(configDir, '.omc', 'cache-occupancy');
+    const omcRoot = join(fakeProject, '.omc');
+    const stateDir = join(omcRoot, 'state');
+    const legacyPath = join(stateDir, 'last-tool-error.json');
+    rmSync(stateDir, { recursive: true, force: true });
+    expect(publishCacheOccupancy(olderPluginRoot, configDir, process.pid)).toBe(true);
+
+    const worker = spawn(NODE, [SCRIPT_PATH, '--stabilize-legacy-tool-failure-state', omcRoot, '500'], {
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+        CLAUDE_CONFIG_DIR: configDir,
+        CLAUDE_PLUGIN_ROOT: currentPluginRoot,
+        OMC_HOOK_BACKGROUND_CHILD: '1',
+        OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+      },
+    });
+    const workerExit = new Promise<number | null>((resolve, reject) => {
+      worker.once('error', reject);
+      worker.once('exit', code => resolve(code));
+    });
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(worker.exitCode).toBeNull();
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(legacyPath, JSON.stringify({ tool_input_preview: 'late legacy secret' }));
+      expect(await waitForFilesToDisappear([legacyPath], 5000)).toBe(true);
+
+      rmSync(registryDir, { recursive: true, force: true });
+      const exitCode = await Promise.race([
+        workerExit,
+        new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 7000)),
+      ]);
+      expect(exitCode).toBe(0);
+    } finally {
+      rmSync(registryDir, { recursive: true, force: true });
+      if (worker.exitCode === null) worker.kill();
+      await workerExit.catch(() => undefined);
+    }
+  });
+
   it('purges legacy tool-failure state from the home root on no-workspace startup', () => {
     const homeStateDir = join(fakeHome, '.omc', 'state');
     const homeSessionDir = join(homeStateDir, 'sessions', 'session-old-home');

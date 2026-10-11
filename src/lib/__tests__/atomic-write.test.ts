@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
 import type { FileHandle } from 'fs/promises';
 
 import {
@@ -364,13 +365,37 @@ describe('atomicWriteJson', () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
+  it.skipIf(process.platform !== 'linux' && process.platform !== 'win32')('rejects a PID reused shortly after a legacy lock timestamp', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-legacy-reused-pid-'));
+    directories.push(directory);
+    process.env.NODE_ENV = 'test';
+    process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
+    const timestamp = Date.now() - 500;
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('spawn', resolve);
+        child.once('error', reject);
+      });
+      if (typeof child.pid !== 'number') throw new Error('reused PID test child did not receive a PID');
+      const lockPath = join(directory, 'last-tool-error.json.lock');
+      writeFileSync(lockPath, JSON.stringify({ pid: child.pid, timestamp }));
+
+      expect(withStateFileLockAtPathSync(lockPath, () => 'written', false, 2)).toEqual({ acquired: true, value: 'written' });
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      child.kill();
+    }
+  });
+
   it('keeps a live legacy owner lock after thirty seconds', () => {
     const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-legacy-live-'));
     directories.push(directory);
     process.env.NODE_ENV = 'test';
     process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
     const lockPath = join(directory, 'last-tool-error.json.lock');
-    const timestamp = Date.now() + 1000;
+    const timestamp = Date.now() + 10_000;
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, timestamp }));
     vi.useFakeTimers();
     vi.setSystemTime(timestamp + 31_000);

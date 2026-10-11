@@ -37,7 +37,8 @@ try {
 const localLocks = new Map();
 const recoveryLocks = new Map();
 // Pre-upgrade PostToolUseFailure locks contain only a PID and timestamp.
-const LEGACY_PROCESS_START_TOLERANCE_MS = 2000;
+const LEGACY_PROCESS_START_UNCERTAINTY_MS = { linux: 20, darwin: 1000, win32: 1 };
+const realDateNow = Date.now.bind(Date);
 let linuxClockTicksPerSecond;
 let ownIdentityCache = null;
 let lastLockFailure = null;
@@ -148,7 +149,12 @@ function ownerLive(owner) {
     if (identity === 'absent') return false;
     if (identity === null) return null;
     const startedAt = processStartTimestamp(owner.pid, identity);
-    return startedAt === null ? null : startedAt <= owner.timestamp + LEGACY_PROCESS_START_TOLERANCE_MS;
+    if (startedAt === null) return null;
+    const uncertainty = LEGACY_PROCESS_START_UNCERTAINTY_MS[process.platform];
+    if (uncertainty === undefined) return null;
+    // The process-start probes have bounded precision; only a later start
+    // beyond that uncertainty proves PID reuse.
+    return startedAt - owner.timestamp <= uncertainty;
   }
   const current = processStartIdentity(owner.pid);
   return current === null ? null : current === 'absent' ? false : current === owner.processStart;
@@ -162,8 +168,8 @@ function processStartTimestamp(pid, expectedIdentity) {
       const fields = end < 0 ? [] : stat.slice(end + 2).trim().split(/\s+/);
       const startTicks = fields[19];
       if (!startTicks || startTicks !== expectedIdentity) return null;
-      const bootSeconds = readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)$/m)?.[1];
-      if (!bootSeconds) return null;
+      const uptimeSeconds = Number(readFileSync('/proc/uptime', 'utf8').trim().split(/\s+/)[0]);
+      if (!Number.isFinite(uptimeSeconds)) return null;
       if (linuxClockTicksPerSecond === undefined) {
         const result = spawnSync('getconf', ['CLK_TCK'], {
           encoding: 'utf8', timeout: 250, windowsHide: true,
@@ -173,7 +179,7 @@ function processStartTimestamp(pid, expectedIdentity) {
         linuxClockTicksPerSecond = Number.isSafeInteger(ticks) && ticks > 0 ? ticks : null;
       }
       if (linuxClockTicksPerSecond === null) return null;
-      return Number(bootSeconds) * 1000 + Number(startTicks) * 1000 / linuxClockTicksPerSecond;
+      return realDateNow() - uptimeSeconds * 1000 + Number(startTicks) * 1000 / linuxClockTicksPerSecond;
     } catch {
       return null;
     }
@@ -186,7 +192,7 @@ function processStartTimestamp(pid, expectedIdentity) {
     const ticks = expectedIdentity.match(/^ticks:(\d+)$/)?.[1];
     if (!ticks) return null;
     try {
-      return Number((BigInt(ticks) - 116444736000000000n) / 10000n);
+      return Number(BigInt(ticks) - 116444736000000000n) / 10000;
     } catch {
       return null;
     }

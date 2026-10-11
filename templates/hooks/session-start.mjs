@@ -288,10 +288,32 @@ function hasActiveOlderPluginRoot() {
 
 async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
   const stateDir = join(omcRoot, 'state');
-  try {
-    if (!lstatSync(stateDir).isDirectory()) return;
-  } catch {
-    return;
+  let olderPluginActive = hasActiveOlderPluginRoot();
+  let quietUntil = Date.now() + stabilizationMs;
+  let nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
+  while (true) {
+    try {
+      if (!lstatSync(stateDir).isDirectory()) return;
+      break;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') return;
+    }
+
+    const now = Date.now();
+    if (now >= nextPluginRootCheck) {
+      olderPluginActive = hasActiveOlderPluginRoot();
+      nextPluginRootCheck = now + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
+    }
+    if (now >= quietUntil && !olderPluginActive) {
+      olderPluginActive = hasActiveOlderPluginRoot();
+      nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
+      if (!olderPluginActive) return;
+    }
+    const remainingQuietMs = quietUntil - Date.now();
+    const pollDelayMs = remainingQuietMs > 0
+      ? Math.min(TOOL_FAILURE_CLEANUP_RESCAN_MS, remainingQuietMs)
+      : TOOL_FAILURE_CLEANUP_RESCAN_MS;
+    await new Promise(resolve => setTimeout(resolve, pollDelayMs));
   }
 
   const stateLock = await loadPostToolFailureStateLock();
@@ -300,10 +322,10 @@ async function stabilizeLegacyToolFailureState(omcRoot, stabilizationMs) {
   );
   if (!workerLock) return;
 
-  let quietUntil = Date.now() + stabilizationMs;
+  quietUntil = Date.now() + stabilizationMs;
   let artifactSnapshot = legacyToolFailureArtifactSnapshot(omcRoot);
-  let olderPluginActive = hasActiveOlderPluginRoot();
-  let nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
+  olderPluginActive = hasActiveOlderPluginRoot();
+  nextPluginRootCheck = Date.now() + TOOL_FAILURE_PLUGIN_ROOT_RESCAN_MS;
   try {
     while (true) {
       const now = Date.now();
