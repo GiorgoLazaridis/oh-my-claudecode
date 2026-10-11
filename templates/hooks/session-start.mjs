@@ -122,6 +122,8 @@ function purgeToolFailureTemps(directory) {
 }
 
 const POST_TOOL_FAILURE_LOCK_STALE_MS = 30_000;
+const POST_TOOL_FAILURE_LOCK_WAIT_MS = 2500;
+const POST_TOOL_FAILURE_LOCK_RETRY_MS = 50;
 
 function isPostToolFailureLockStale(path) {
   try {
@@ -171,6 +173,28 @@ function tryAcquirePostToolFailureLock(canonicalPath) {
   }
 }
 
+function hasActivePostToolFailureLock(path) {
+  try {
+    return lstatSync(path).isFile() && !isPostToolFailureLockStale(path);
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPostToolFailureLock(canonicalPath, deadline) {
+  const path = `${canonicalPath}.lock`;
+  while (true) {
+    const lock = tryAcquirePostToolFailureLock(canonicalPath);
+    if (lock) return lock;
+    if (!hasActivePostToolFailureLock(path)) {
+      if (!existsSync(path)) continue;
+      return null;
+    }
+    if (Date.now() >= deadline) return null;
+    await new Promise(resolve => setTimeout(resolve, POST_TOOL_FAILURE_LOCK_RETRY_MS));
+  }
+}
+
 function releasePostToolFailureLock(lock) {
   try { closeSync(lock.fd); } catch {}
   try { unlinkSync(lock.path); } catch {}
@@ -179,16 +203,17 @@ function releasePostToolFailureLock(lock) {
 function hasToolFailureArtifacts(directory, canonicalFilename) {
   try {
     if (!lstatSync(directory).isDirectory()) return false;
-    return readdirSync(directory).some(name => name === canonicalFilename || TOOL_FAILURE_TEMP_FILE_PATTERN.test(name));
+    const lockFilename = `${canonicalFilename}.lock`;
+    return readdirSync(directory).some(name => name === canonicalFilename || name === lockFilename || TOOL_FAILURE_TEMP_FILE_PATTERN.test(name));
   } catch {
     return false;
   }
 }
 
-function purgeToolFailureStateDirectory(directory, canonicalFilename) {
+async function purgeToolFailureStateDirectory(directory, canonicalFilename, deadline) {
   if (!hasToolFailureArtifacts(directory, canonicalFilename)) return;
   const canonicalPath = join(directory, canonicalFilename);
-  const postToolFailureLock = tryAcquirePostToolFailureLock(canonicalPath);
+  const postToolFailureLock = await waitForPostToolFailureLock(canonicalPath, deadline);
   if (!postToolFailureLock) return;
   try {
     purgeLegacyToolFailureFile(canonicalPath);
@@ -198,7 +223,7 @@ function purgeToolFailureStateDirectory(directory, canonicalFilename) {
   }
 }
 
-function purgeLegacyToolFailureState(omcRoot) {
+async function purgeLegacyToolFailureState(omcRoot) {
   const stateDir = join(omcRoot, 'state');
   try {
     if (!lstatSync(stateDir).isDirectory()) return;
@@ -206,7 +231,8 @@ function purgeLegacyToolFailureState(omcRoot) {
     return;
   }
 
-  purgeToolFailureStateDirectory(stateDir, 'last-tool-error.json');
+  const deadline = Date.now() + POST_TOOL_FAILURE_LOCK_WAIT_MS;
+  await purgeToolFailureStateDirectory(stateDir, 'last-tool-error.json', deadline);
 
   const sessionsDir = join(stateDir, 'sessions');
   let sessions;
@@ -221,7 +247,7 @@ function purgeLegacyToolFailureState(omcRoot) {
     const sessionDir = join(sessionsDir, sessionId);
     try {
       if (!lstatSync(sessionDir).isDirectory()) continue;
-      purgeToolFailureStateDirectory(sessionDir, 'last-tool-error-state.json');
+      await purgeToolFailureStateDirectory(sessionDir, 'last-tool-error-state.json', deadline);
     } catch {
       // Skip inaccessible or replaced session directories.
     }
@@ -783,7 +809,7 @@ async function main() {
         const unscopedOmcRoot = process.env.OMC_STATE_DIR
           ? resolve(process.env.OMC_STATE_DIR, 'non-git')
           : join(homedir(), '.omc');
-        purgeLegacyToolFailureState(unscopedOmcRoot);
+        await purgeLegacyToolFailureState(unscopedOmcRoot);
       } catch {
         // Legacy-state cleanup is best-effort on the no-workspace fast path.
       }
@@ -792,7 +818,7 @@ async function main() {
       return;
     }
     const sessionId = data.sessionId || data.session_id || data.sessionid || '';
-    purgeLegacyToolFailureState(await resolveOmcStateRoot(directory));
+    await purgeLegacyToolFailureState(await resolveOmcStateRoot(directory));
     if (process.env.CLAUDE_PLUGIN_ROOT) {
       // Issue #3995: resolve plugin-cache occupancy ONCE per session start.
       // The win32 batched identity host (the only PowerShell spawn on this

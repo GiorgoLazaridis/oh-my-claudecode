@@ -81,6 +81,39 @@ process.stdin.once('data', () => {
   };
 }
 
+function startSessionStartProcess(
+  scriptPath: string,
+  fakeHome: string,
+  input: Record<string, unknown>,
+  extraEnv: Record<string, string> = {},
+) {
+  const child = spawn(NODE, [scriptPath], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, ...extraEnv },
+  });
+  let stdout = '';
+  let stderr = '';
+  const output = new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error(`SessionStart timed out: ${stderr}`));
+    }, 15000);
+    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.once('error', error => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(`SessionStart exited (${code ?? signal}): ${stderr}`));
+    });
+  });
+  child.stdin.end(JSON.stringify(input));
+  return { child, output };
+}
+
 describe('session-start.mjs regression #1386', () => {
   let tempDir: string;
   let fakeHome: string;
@@ -249,36 +282,26 @@ describe('session-start.mjs regression #1386', () => {
     const canonicalPath = join(stateDir, 'last-tool-error.json');
     const tempPath = join(stateDir, `.last-tool-error.json.tmp.${randomUUID()}`);
     const holder = startPostToolFailureLockHolder(canonicalPath);
-    const invokeSessionStart = () => JSON.parse(execFileSync(NODE, [SCRIPT_PATH], {
-      input: JSON.stringify({
-        hook_event_name: 'SessionStart',
-        session_id: 'session-current',
-        cwd: fakeProject,
-      }),
-      encoding: 'utf-8',
-      env: {
-        ...process.env,
-        HOME: fakeHome,
-        USERPROFILE: fakeHome,
-        CLAUDE_PLUGIN_ROOT: '',
-        OMC_STATE_DIR: '',
-      },
-      timeout: 15000,
-    }));
+    let sessionStart: ReturnType<typeof startSessionStartProcess> | undefined;
 
     try {
       await holder.ready;
+      sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+        hook_event_name: 'SessionStart',
+        session_id: 'session-current',
+        cwd: fakeProject,
+      }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '' });
+      await new Promise(resolve => setTimeout(resolve, 250));
       writeFileSync(tempPath, '{"tool_input_preview":"in-flight legacy payload"');
-      const inFlightOutput = invokeSessionStart();
-      expect(inFlightOutput.continue).toBe(true);
       expect(existsSync(tempPath)).toBe(true);
 
       expect(await holder.release()).toEqual({ code: 0, signal: null });
-      const retryOutput = invokeSessionStart();
-      expect(retryOutput.continue).toBe(true);
+      const output = JSON.parse(await sessionStart.output);
+      expect(output.continue).toBe(true);
       expect(existsSync(tempPath)).toBe(false);
     } finally {
       await holder.release();
+      if (sessionStart) await sessionStart.output.catch(() => '');
     }
   });
 
