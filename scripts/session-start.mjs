@@ -171,7 +171,10 @@ function hasToolFailureArtifacts(directory, canonicalFilename) {
   try {
     if (!lstatSync(directory).isDirectory()) return false;
     const lockFilename = `${canonicalFilename}.lock`;
-    return readdirSync(directory).some(name => name === canonicalFilename || name === lockFilename || TOOL_FAILURE_TEMP_FILE_PATTERN.test(name));
+    const names = readdirSync(directory);
+    if (names.some(name => name === lockFilename || TOOL_FAILURE_TEMP_FILE_PATTERN.test(name))) return true;
+    return names.includes(canonicalFilename)
+      && !isSanitizedToolFailureState(readJsonFile(join(directory, canonicalFilename)));
   } catch {
     return false;
   }

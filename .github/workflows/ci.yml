@@ -180,13 +180,17 @@ jobs:
       - name: Build shipped restore implementation
         run: npm run build
 
-      - name: Run portable restore, SessionStart, and state-lock tests
+      - name: Run portable restore and SessionStart interleaving tests
         env:
           OMC_PRECOMPACT_DIST_INTERLEAVINGS: '1'
         run: >-
           npx vitest run
           src/hooks/__tests__/precompact-restore.test.ts
           src/__tests__/session-start-precompact-restore.test.ts
+
+      - name: Run Unix state-lock tests
+        if: runner.os != 'Windows'
+        run: npx vitest run src/lib/__tests__/atomic-write.test.ts
           src/lib/__tests__/atomic-write.test.ts
 
   build:

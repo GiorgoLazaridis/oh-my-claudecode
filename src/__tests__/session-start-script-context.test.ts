@@ -81,6 +81,49 @@ process.stdin.once('data', () => {
   };
 }
 
+function startSqliteMutationLockHolder(databasePath: string) {
+  const source = `import Database from 'better-sqlite3';
+const database = new Database(process.argv[1]);
+database.pragma('journal_mode = WAL');
+database.exec('CREATE TABLE IF NOT EXISTS state_mutation_locks (lock_key TEXT PRIMARY KEY, version INTEGER NOT NULL, pid INTEGER NOT NULL, process_start TEXT NOT NULL, created_at TEXT NOT NULL, nonce TEXT NOT NULL)');
+database.exec('BEGIN IMMEDIATE');
+process.stdout.write('LOCKED');
+process.stdin.once('data', () => { database.exec('ROLLBACK'); database.close(); });
+process.stdin.resume();`;
+  const child = spawn(NODE, ['--input-type=module', '-e', source, databasePath], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let output = '';
+  const ready = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timeout = setTimeout(() => finish(new Error(`Timed out acquiring SQLite mutation lock: ${output}`)), 5000);
+    child.stdout.on('data', chunk => {
+      output += chunk.toString();
+      if (output.includes('LOCKED')) finish();
+    });
+    child.stderr.on('data', chunk => { output += chunk.toString(); });
+    child.once('error', error => finish(error));
+    child.once('exit', code => {
+      if (!output.includes('LOCKED')) finish(new Error(`SQLite mutation lock holder exited (${code}): ${output}`));
+    });
+  });
+
+  return {
+    ready,
+    async release() {
+      child.stdin.end('release');
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise<void>(resolve => child.once('exit', () => resolve()));
+      }
+    },
+  };
+}
+
 function startSessionStartProcess(
   scriptPath: string,
   fakeHome: string,
@@ -512,6 +555,46 @@ describe('session-start.mjs regression #1386', () => {
       expect(await waitForFilesToDisappear([workerLockPath], 5000)).toBe(true);
     } finally {
       await sessionStart.output.catch(() => '');
+    }
+  });
+
+  it('skips sanitized session records before waiting for the shared SQLite lock', async () => {
+    const omcRoot = join(fakeProject, '.omc');
+    const stateDir = join(omcRoot, 'state');
+    const sessionsDir = join(stateDir, 'sessions');
+    const sanitizedState = {
+      tool_name: 'Bash',
+      error: 'Tool execution failed (details omitted for privacy).',
+      timestamp: new Date().toISOString(),
+      retry_count: 0,
+    };
+    for (let index = 0; index < 20; index += 1) {
+      const sessionDir = join(sessionsDir, `session-sanitized-${index}`);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, 'last-tool-error-state.json'), JSON.stringify(sanitizedState));
+    }
+
+    const holder = startSqliteMutationLockHolder(join(stateDir, '.state-mutation-locks.db'));
+    try {
+      await holder.ready;
+      const startedAt = Date.now();
+      const cleanup = spawnSync(NODE, [SCRIPT_PATH, '--purge-legacy-tool-failure-state', omcRoot, '1500'], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        env: {
+          ...process.env,
+          OMC_HOOK_BACKGROUND_CHILD: '1',
+          OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '1',
+        },
+      });
+
+      expect(cleanup.error).toBeUndefined();
+      expect(cleanup.status).toBe(0);
+      expect(Date.now() - startedAt).toBeLessThan(800);
+      expect(readFileSync(join(sessionsDir, 'session-sanitized-0', 'last-tool-error-state.json'), 'utf8'))
+        .toBe(JSON.stringify(sanitizedState));
+    } finally {
+      await holder.release();
     }
   });
 
