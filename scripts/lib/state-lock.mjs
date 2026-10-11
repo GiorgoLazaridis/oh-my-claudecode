@@ -194,7 +194,7 @@ function processStartTimestamp(pid, expectedIdentity) {
     const ticks = expectedIdentity.match(/^ticks:(\d+)$/)?.[1];
     if (!ticks) return null;
     try {
-      return Number(BigInt(ticks) - 116444736000000000n) / 10000;
+      return Number(BigInt(ticks) - 621355968000000000n) / 10000;
     } catch {
       return null;
     }

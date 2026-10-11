@@ -109,7 +109,6 @@ jobs:
           src/__tests__/session-history-search.test.ts
           src/cli/__tests__/session-search.test.ts
           src/lib/__tests__/worktree-paths.test.ts
-          src/lib/__tests__/atomic-write.test.ts
           src/lib/__tests__/worktree-paths-git-probe-failclosed.test.ts
           src/lib/__tests__/worktree-paths-foreign-root.test.ts
           src/lib/__tests__/worktree-paths-issue-4254-win32.test.ts
@@ -124,6 +123,12 @@ jobs:
           src/__tests__/run-cjs-windows-stdio-contract.test.ts
           src/installer/__tests__/claude-md-transaction.test.ts
           src/team/__tests__/cli-detection.windows.integration.test.ts
+
+      - name: Run Windows legacy state-lock tests
+        run: >-
+          npx vitest run --fileParallelism=false
+          src/lib/__tests__/atomic-write.test.ts
+          -t "legacy.*lock"
 
   better-sqlite3-node26:
     name: better-sqlite3 Node 26 (${{ matrix.os }})
