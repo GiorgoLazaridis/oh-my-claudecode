@@ -364,6 +364,29 @@ describe('session-start template retired-state handling', () => {
     }
   });
 
+  it('retries deferred cleanup after its own lock wait expires', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const legacyPath = join(stateDir, 'last-tool-error.json');
+    const holder = startPostToolFailureLockHolder(legacyPath);
+
+    try {
+      await holder.ready;
+      writeFileSync(legacyPath, JSON.stringify({ tool_input_preview: 'deferred legacy secret' }));
+      const cleanup = spawnSync(NODE, [SCRIPT_PATH, '--purge-legacy-tool-failure-state', join(fakeProject, '.omc'), '100'], {
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+      expect(cleanup.error).toBeUndefined();
+      expect(cleanup.status).toBe(0);
+      expect(existsSync(legacyPath)).toBe(true);
+
+      expect(await holder.release()).toEqual({ code: 0, signal: null });
+      expect(await waitForFilesToDisappear([legacyPath], 5000)).toBe(true);
+    } finally {
+      await holder.release();
+    }
+  });
+
   it('purges legacy tool-failure state from the home root on no-workspace startup', () => {
     const homeStateDir = join(fakeHome, '.omc', 'state');
     const homeSessionDir = join(homeStateDir, 'sessions', 'session-old-home');

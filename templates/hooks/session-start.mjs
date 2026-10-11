@@ -229,9 +229,9 @@ async function purgeToolFailureStateDirectory(directory, canonicalFilename, dead
   return false;
 }
 
-function deferLegacyToolFailureCleanup(omcRoot) {
+function deferLegacyToolFailureCleanup(omcRoot, waitMs = POST_TOOL_FAILURE_DEFERRED_WAIT_MS) {
   try {
-    const child = spawn(process.execPath, [__filename, DEFERRED_TOOL_FAILURE_CLEANUP_FLAG, omcRoot], {
+    const child = spawn(process.execPath, [__filename, DEFERRED_TOOL_FAILURE_CLEANUP_FLAG, omcRoot, String(waitMs)], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -274,7 +274,7 @@ async function purgeLegacyToolFailureState(omcRoot, waitMs = POST_TOOL_FAILURE_L
   const cleanupPending = (await Promise.all(
     directories.map(([directory, filename]) => purgeToolFailureStateDirectory(directory, filename, deadline)),
   )).some(Boolean);
-  if (cleanupPending && deferOnTimeout) deferLegacyToolFailureCleanup(omcRoot);
+  if (cleanupPending && deferOnTimeout) deferLegacyToolFailureCleanup(omcRoot, POST_TOOL_FAILURE_DEFERRED_WAIT_MS);
   return cleanupPending;
 }
 
@@ -1073,7 +1073,11 @@ if (process.argv.includes(REFRESH_UPDATE_CACHE_FLAG)) {
   if (!omcRoot) {
     process.exit(0);
   }
-  purgeLegacyToolFailureState(omcRoot, POST_TOOL_FAILURE_DEFERRED_WAIT_MS, false)
+  const requestedWaitMs = Number(process.argv[4]);
+  const waitMs = Number.isFinite(requestedWaitMs) && requestedWaitMs > 0
+    ? Math.min(requestedWaitMs, POST_TOOL_FAILURE_DEFERRED_WAIT_MS)
+    : POST_TOOL_FAILURE_DEFERRED_WAIT_MS;
+  purgeLegacyToolFailureState(omcRoot, waitMs)
     .catch(() => {})
     .finally(() => process.exit(0));
 } else {
