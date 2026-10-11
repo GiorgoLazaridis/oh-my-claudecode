@@ -68,7 +68,7 @@ function validateSessionId(sessionId) {
 // Use the same process-identity-aware state lock as the cleanup hook.
 function withFileLockSync(filePath, fn) {
   const result = withStateFileLockAtPathSync(`${filePath}.lock`, fn, true);
-  if (!result.acquired) fn();
+  if (!result.acquired && !result.callbackRan) fn();
 }
 
 // ============================================================================

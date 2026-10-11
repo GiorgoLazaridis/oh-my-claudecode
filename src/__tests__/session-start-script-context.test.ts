@@ -378,6 +378,23 @@ describe('session-start.mjs regression #1386', () => {
     }
   });
 
+  it('does not classify unverifiable failure-state locks as retryable contention', async () => {
+    const stateDir = join(fakeProject, '.omc', 'state');
+    const legacyPath = join(stateDir, 'last-tool-error.json');
+    writeFileSync(legacyPath, JSON.stringify({ tool_input_preview: 'unverifiable legacy secret' }));
+    writeFileSync(`${legacyPath}.lock`, 'malformed lock metadata');
+
+    const output = JSON.parse(await startSessionStartProcess(SCRIPT_PATH, fakeHome, {
+      hook_event_name: 'SessionStart',
+      session_id: 'session-current',
+      cwd: fakeProject,
+    }, { CLAUDE_PLUGIN_ROOT: '', OMC_STATE_DIR: '', OMC_HOOK_BACKGROUND_CHILD: '1' }).output);
+
+    expect(output.continue).toBe(true);
+    expect(existsSync(legacyPath)).toBe(true);
+    expect(readFileSync(`${legacyPath}.lock`, 'utf-8')).toBe('malformed lock metadata');
+  });
+
   it('retries deferred cleanup after its own lock wait expires', async () => {
     const stateDir = join(fakeProject, '.omc', 'state');
     const legacyPath = join(stateDir, 'last-tool-error.json');

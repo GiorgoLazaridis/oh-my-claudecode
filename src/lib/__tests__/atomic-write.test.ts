@@ -18,7 +18,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getProcessStartIdentitySync } from '../../platform/process-utils.js';
 // @ts-expect-error Hook runtime source is intentionally JavaScript-only.
-import { withStateFileLockAtPathSync, withStateFileLockSync } from '../../../scripts/lib/atomic-write.mjs';
+import { getStateFileLockFailureKind, withStateFileLockAtPathSync, withStateFileLockSync } from '../../../scripts/lib/atomic-write.mjs';
 
 import { tmpdir } from 'os';
 
@@ -362,6 +362,48 @@ describe('atomicWriteJson', () => {
 
     expect(withStateFileLockAtPathSync(lockPath, () => 'written')).toEqual({ acquired: true, value: 'written' });
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('reports malformed exact-path lock metadata as unverifiable', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-malformed-'));
+    directories.push(directory);
+    process.env.NODE_ENV = 'test';
+    process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
+    const lockPath = join(directory, 'last-tool-error.json.lock');
+    writeFileSync(lockPath, 'not-json');
+
+    expect(withStateFileLockAtPathSync(lockPath, () => 'must not run')).toEqual({ acquired: false, value: undefined });
+    expect(getStateFileLockFailureKind()).toBe('unverifiable');
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  it('marks a callback as already run when lock release fails', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'atomic-write-lock-release-'));
+    directories.push(directory);
+    process.env.NODE_ENV = 'test';
+    process.env.OMC_TEST_FLOCK_AVAILABLE = '0';
+    const lockPath = join(directory, 'last-tool-error.json.lock');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let callbackCalls = 0;
+
+    try {
+      const result = withStateFileLockAtPathSync(lockPath, () => {
+        callbackCalls += 1;
+        writeFileSync(lockPath, JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          processStart: 'replacement-owner',
+          createdAt: new Date().toISOString(),
+          nonce: randomUUID(),
+        }));
+      });
+
+      expect(result).toEqual({ acquired: false, value: undefined, callbackRan: true });
+      expect(callbackCalls).toBe(1);
+      expect(getStateFileLockFailureKind()).toBe('unverifiable');
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 

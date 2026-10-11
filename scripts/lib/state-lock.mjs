@@ -313,6 +313,10 @@ export function getStateFileLockFailureMessage() {
   return sqliteBindingLoadError || 'state mutation lock unavailable';
 }
 
+export function getStateFileLockFailureKind() {
+  return lastLockFailure;
+}
+
 export function isStateFileLockingSupported() {
   // The owner-file fallback is a real exclusive backend, so callers must not
   // downgrade to an unlocked read when SQLite is unavailable.
@@ -622,7 +626,9 @@ export function withStateFileLockAtPathSync(lockPath, callback, requireExclusive
   } finally {
     releaseFailed = !releaseStateFileLockSync(lock);
   }
-  return releaseFailed ? { acquired: false, value: undefined } : { acquired: true, value };
+  return releaseFailed
+    ? { acquired: false, value: undefined, callbackRan: true }
+    : { acquired: true, value };
 }
 
 export function acquireRecoveryClaim(path, attempts = 50) {

@@ -135,14 +135,15 @@ async function loadPostToolFailureStateLock() {
 }
 
 async function waitForPostToolFailureLock(canonicalPath, deadline) {
-  const { acquireStateFileLockAtPathSync } = await loadPostToolFailureStateLock();
+  const { acquireStateFileLockAtPathSync, getStateFileLockFailureKind } = await loadPostToolFailureStateLock();
   while (Date.now() < deadline) {
     const lock = acquireStateFileLockAtPathSync(`${canonicalPath}.lock`, 1, true);
-    if (lock) return lock;
+    if (lock) return { lock, timedOut: false };
+    if (getStateFileLockFailureKind() !== 'contention') return { lock: null, timedOut: false };
     const remaining = deadline - Date.now();
     if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(POST_TOOL_FAILURE_LOCK_RETRY_MS, remaining)));
   }
-  return null;
+  return { lock: null, timedOut: true };
 }
 
 function releasePostToolFailureLock(lock) {
@@ -163,12 +164,14 @@ async function purgeToolFailureStateDirectory(directory, canonicalFilename, dead
   if (!hasToolFailureArtifacts(directory, canonicalFilename)) return false;
   const canonicalPath = join(directory, canonicalFilename);
   let postToolFailureLock;
+  let lockWait;
   try {
-    postToolFailureLock = await waitForPostToolFailureLock(canonicalPath, deadline);
+    lockWait = await waitForPostToolFailureLock(canonicalPath, deadline);
   } catch {
     return false;
   }
-  if (!postToolFailureLock) return true;
+  postToolFailureLock = lockWait.lock;
+  if (!postToolFailureLock) return lockWait.timedOut;
   try {
     purgeLegacyToolFailureFile(canonicalPath);
     purgeToolFailureTemps(directory);

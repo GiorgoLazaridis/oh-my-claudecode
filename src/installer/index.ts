@@ -945,6 +945,7 @@ export const isStateFileLockingSupported = canonical.isStateFileLockingSupported
 export const isExclusiveStateLockingAvailable = canonical.isExclusiveStateLockingAvailable;
 export const getStateFileLockDiagnostic = canonical.getStateFileLockDiagnostic;
 export const getStateFileLockFailureMessage = canonical.getStateFileLockFailureMessage;
+export const getStateFileLockFailureKind = canonical.getStateFileLockFailureKind;
 export const acquireStateFileLockSync = canonical.acquireStateFileLockSync;
 export const acquireStateFileLockAtPathSync = canonical.acquireStateFileLockAtPathSync;
 export const releaseStateFileLockSync = canonical.releaseStateFileLockSync;
