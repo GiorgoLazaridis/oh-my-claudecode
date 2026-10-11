@@ -70,9 +70,7 @@ process.stdin.once('data', () => {
   return {
     ready,
     async release() {
-      if (!exitResult) {
-        try { child.stdin.end('release'); } catch {}
-      }
+      if (!exitResult && child.stdin.writable && !child.stdin.writableEnded) child.stdin.end('release');
       let result = await waitForExit(5000);
       if (!result) {
         child.kill();
