@@ -510,7 +510,6 @@ describe('session-start template retired-state handling', () => {
     const olderPluginRoot = join(pluginParent, 'older');
     const registryDir = join(configDir, '.omc', 'cache-occupancy');
     const workerLockPath = join(fakeProject, '.omc', 'state', '.legacy-tool-failure-cleanup-worker.lock');
-    expect(publishCacheOccupancy(olderPluginRoot, configDir, process.pid)).toBe(true);
 
     const sessionStart = startSessionStartProcess(SCRIPT_PATH, fakeHome, {
       hook_event_name: 'SessionStart',
@@ -521,13 +520,14 @@ describe('session-start template retired-state handling', () => {
       CLAUDE_PLUGIN_ROOT: currentPluginRoot,
       OMC_STATE_DIR: '',
       OMC_HOOK_BACKGROUND_CHILD: '0',
-      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '500',
+      OMC_TEST_TOOL_FAILURE_STABILIZATION_MS: '5000',
     });
 
     try {
       expect(JSON.parse(await sessionStart.output).continue).toBe(true);
       expect(await waitForFilesToAppear([workerLockPath], 5000)).toBe(true);
-      await new Promise(resolve => setTimeout(resolve, 750));
+      expect(publishCacheOccupancy(olderPluginRoot, configDir, process.pid)).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 5200));
       expect(existsSync(workerLockPath)).toBe(true);
 
       rmSync(registryDir, { recursive: true, force: true });
