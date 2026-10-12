@@ -5,15 +5,15 @@
   "provenance": {
     "base": "05c800f40d1ad53b42a78609d2667ef4f726808b",
     "planningHead": "0a91273e61dbbd47eb0af4c02844409251e08398",
-    "head": "c67ecf94d50a80d578f11b23a3e212c456359639",
-    "sourceSha256": "8fd0c7a92f8012fe854a7de72da5a1a7ac5b091b837d72c1a0f0bcffe99d73fa",
+    "head": "1aa9629efe8b18d31492e8500966a6f922bac14f",
+    "sourceSha256": "40f44405081e340952e5a515ee168962b200e0dead0b3f20e9224570303292eb",
     "generatedAt": null,
     "generator": "scripts/generate-inventory-graph.mjs"
   },
   "base": "05c800f40d1ad53b42a78609d2667ef4f726808b",
   "planningHead": "0a91273e61dbbd47eb0af4c02844409251e08398",
-  "head": "c67ecf94d50a80d578f11b23a3e212c456359639",
-  "sourceSha256": "8fd0c7a92f8012fe854a7de72da5a1a7ac5b091b837d72c1a0f0bcffe99d73fa",
+  "head": "1aa9629efe8b18d31492e8500966a6f922bac14f",
+  "sourceSha256": "40f44405081e340952e5a515ee168962b200e0dead0b3f20e9224570303292eb",
   "counts": {
     "public": {
       "skills": 48,
@@ -80614,6 +80614,21 @@
       },
       {
         "from": "src/team/__tests__/tmux-session.pane-env.test.ts",
+        "to": "src/cli/tmux-utils.ts",
+        "kind": "imports"
+      },
+      {
+        "from": "src/team/__tests__/tmux-session.pane-env.test.ts",
+        "to": "src/team/runtime-owner-client.ts",
+        "kind": "imports"
+      },
+      {
+        "from": "src/team/__tests__/tmux-session.pane-env.test.ts",
+        "to": "src/team/team-owner-epoch.ts",
+        "kind": "imports"
+      },
+      {
+        "from": "src/team/__tests__/tmux-session.pane-env.test.ts",
         "to": "src/team/tmux-session.ts",
         "kind": "imports"
       },
@@ -88250,11 +88265,11 @@
     ],
     "stats": {
       "nodeCount": 7743,
-      "edgeCount": 8483,
-      "importEdgeCount": 7037,
+      "edgeCount": 8486,
+      "importEdgeCount": 7040,
       "registerEdgeCount": 69
     }
   },
   "inventorySha256": "ce806a74606e197fdfb181aa2d6018b865debd3b90a7c8270cc9603719a9a9e8",
-  "manifestSha256": "9924ae06c77024a827cc63959269773d44307c225c1a6d831f46ba006ed46257"
+  "manifestSha256": "65a376e9ea3a164c46e8dbb26cb9c9b2f838fb4f73cf6cdc1c375af86e0f7d63"
 }

@@ -4,26 +4,6 @@
   "owner": "Yeachan-Heo",
   "authorizations": [
     {
-      "pullNumber": 4334,
-      "targetRef": "dev",
-      "mergeBaseSha": "ba3f7891d108f5ee89e85ab6c5ed4cd7aa18761b",
-      "headSha": "d2e404ca105e838c7387fda1f737462bbd6e2644",
-      "owner": "Yeachan-Heo",
-      "expiresAt": "2026-10-27T00:00:00.000Z",
-      "generatedDelta": {
-        "count": 1,
-        "sha256": "deleted-bridge-runtime-cli"
-      },
-      "generatedFiles": [
-        {
-          "status": "deleted",
-          "filename": "bridge/runtime-cli.cjs",
-          "sha": null,
-          "previousFilename": null
-        }
-      ]
-    },
-    {
       "pullNumber": 3537,
       "targetRef": "main",
       "mergeBaseSha": "76c90920b74494df6e34d6165be963bca8a9adf6",
