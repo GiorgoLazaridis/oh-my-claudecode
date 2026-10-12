@@ -2143,9 +2143,10 @@ export async function splitTeamWorkerPaneWithEvidence(
       '-c', cwd,
       ...splitPaneShell.args,
     ];
-    const splitResult = await runGuardedNativeTmuxCreationCommand(
+    const splitResult = await runPaneCreationCommand(
           identity,
           tmuxCommandString(splitArgs, ['#{pane_id}\t#{socket_path}\t#{pid}']),
+          splitPaneShell,
           3,
         );
     const parsed = splitResult.outcome === 'executed'
