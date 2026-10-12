@@ -5,15 +5,15 @@
   "provenance": {
     "base": "05c800f40d1ad53b42a78609d2667ef4f726808b",
     "planningHead": "0a91273e61dbbd47eb0af4c02844409251e08398",
-    "head": "1aa9629efe8b18d31492e8500966a6f922bac14f",
-    "sourceSha256": "40f44405081e340952e5a515ee168962b200e0dead0b3f20e9224570303292eb",
+    "head": "191e4a703b72613315785c0efe014365fa0ff298",
+    "sourceSha256": "2cf1ce15ff6984908fc54d7434bd0cfaac952ba879e78222116801f60dc79f0a",
     "generatedAt": null,
     "generator": "scripts/generate-inventory-graph.mjs"
   },
   "base": "05c800f40d1ad53b42a78609d2667ef4f726808b",
   "planningHead": "0a91273e61dbbd47eb0af4c02844409251e08398",
-  "head": "1aa9629efe8b18d31492e8500966a6f922bac14f",
-  "sourceSha256": "40f44405081e340952e5a515ee168962b200e0dead0b3f20e9224570303292eb",
+  "head": "191e4a703b72613315785c0efe014365fa0ff298",
+  "sourceSha256": "2cf1ce15ff6984908fc54d7434bd0cfaac952ba879e78222116801f60dc79f0a",
   "counts": {
     "public": {
       "skills": 48,
@@ -25,11 +25,11 @@
     "internal": {
       "hookFiles": 339,
       "featureFiles": 85,
-      "toolFiles": 63,
+      "toolFiles": 64,
       "libFiles": 48,
       "templateHooks": 23,
-      "srcFiles": 1465,
-      "total": 1488
+      "srcFiles": 1466,
+      "total": 1489
     },
     "generated": {
       "distFiles": 5621,
@@ -599,6 +599,7 @@
       "src/tools/diagnostics/AGENTS.md",
       "src/tools/diagnostics/__tests__/lsp-aggregator.test.ts",
       "src/tools/diagnostics/__tests__/tsc-project-failures.test.ts",
+      "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
       "src/tools/diagnostics/index.ts",
       "src/tools/diagnostics/lsp-aggregator.ts",
       "src/tools/diagnostics/tsc-runner.ts",
@@ -7064,6 +7065,7 @@
       "src/tools/diagnostics/AGENTS.md",
       "src/tools/diagnostics/__tests__/lsp-aggregator.test.ts",
       "src/tools/diagnostics/__tests__/tsc-project-failures.test.ts",
+      "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
       "src/tools/diagnostics/index.ts",
       "src/tools/diagnostics/lsp-aggregator.ts",
       "src/tools/diagnostics/tsc-runner.ts",
@@ -44979,6 +44981,11 @@
         "id": "src/tools/diagnostics/__tests__/tsc-project-failures.test.ts",
         "kind": "tool",
         "path": "src/tools/diagnostics/__tests__/tsc-project-failures.test.ts"
+      },
+      {
+        "id": "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
+        "kind": "tool",
+        "path": "src/tools/diagnostics/__tests__/tsc-runner.test.ts"
       },
       {
         "id": "src/tools/diagnostics/index.ts",
@@ -84863,6 +84870,31 @@
         "kind": "imports"
       },
       {
+        "from": "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
+        "to": "external:fs",
+        "kind": "imports"
+      },
+      {
+        "from": "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
+        "to": "external:os",
+        "kind": "imports"
+      },
+      {
+        "from": "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
+        "to": "external:path",
+        "kind": "imports"
+      },
+      {
+        "from": "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
+        "to": "external:vitest",
+        "kind": "imports"
+      },
+      {
+        "from": "src/tools/diagnostics/__tests__/tsc-runner.test.ts",
+        "to": "src/tools/diagnostics/tsc-runner.ts",
+        "kind": "imports"
+      },
+      {
         "from": "src/tools/diagnostics/index.ts",
         "to": "external:fs",
         "kind": "imports"
@@ -84940,6 +84972,11 @@
       {
         "from": "src/tools/diagnostics/tsc-runner.ts",
         "to": "external:fs",
+        "kind": "imports"
+      },
+      {
+        "from": "src/tools/diagnostics/tsc-runner.ts",
+        "to": "external:os",
         "kind": "imports"
       },
       {
@@ -88264,12 +88301,12 @@
       }
     ],
     "stats": {
-      "nodeCount": 7743,
-      "edgeCount": 8486,
-      "importEdgeCount": 7040,
+      "nodeCount": 7744,
+      "edgeCount": 8492,
+      "importEdgeCount": 7046,
       "registerEdgeCount": 69
     }
   },
-  "inventorySha256": "ce806a74606e197fdfb181aa2d6018b865debd3b90a7c8270cc9603719a9a9e8",
-  "manifestSha256": "65a376e9ea3a164c46e8dbb26cb9c9b2f838fb4f73cf6cdc1c375af86e0f7d63"
+  "inventorySha256": "3d658ba5b322a4e6495263f24fa10ff2a6a88b0746782cd9b28c28e8f825872a",
+  "manifestSha256": "4f15f030d7f55b259a4e17474512548da4cb0e588085e475eca2bb272dbb18ac"
 }
