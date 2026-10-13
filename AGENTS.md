@@ -168,7 +168,7 @@ Do not ask for confirmation — just read the skill file and follow its instruct
 | "plan this", "plan the", "let's plan" | `$plan` | Read `~/.agents/skills/plan/SKILL.md`, start planning workflow |
 | "interview", "deep interview", "gather requirements", "interview me", "don't assume", "ouroboros" | `$deep-interview` | Read `~/.agents/skills/deep-interview/SKILL.md`, run Ouroboros-inspired Socratic ambiguity-gated interview workflow |
 | "ralplan", "consensus plan" | `$ralplan` | Read `~/.agents/skills/ralplan/SKILL.md`, start consensus planning with RALPLAN-DR structured deliberation (short by default, `--deliberate` for high-risk) |
-| "ecomode", "eco", "budget" | `$ecomode` | Read `~/.agents/skills/ecomode/SKILL.md`, enable token-efficient mode |
+
 | "cancel", "stop", "abort" | `$cancel` | Read `~/.agents/skills/cancel/SKILL.md`, cancel active modes |
 | "tdd", "test first" | keyword mode | Inject TDD-mode guidance and favor test-first execution with `test-engineer` when appropriate |
 | "cleanup", "deslop", "anti-slop" | `$ai-slop-cleaner` | Read `~/.agents/skills/ai-slop-cleaner/SKILL.md`, plan and clean AI-generated slop with separate writer/reviewer passes |
@@ -197,7 +197,7 @@ Workflow Skills:
 - `ultrawork`: Maximum parallelism with parallel agent orchestration
 - `visual-verdict`: Structured visual QA verdict loop for screenshot/reference comparisons
 - `web-clone`: URL-driven website cloning with visual + functional verification
-- `ecomode`: Token-efficient execution using lightweight models
+
 - `team`: N coordinated agents on shared task list
 - `plan`: Strategic planning with optional RALPLAN-DR consensus mode
 - `deep-interview`: Socratic deep interview with Ouroboros-inspired mathematical ambiguity gating before execution
@@ -394,7 +394,7 @@ Recommended mode fields:
 - `autopilot`: `active`, `current_phase` (`expansion|planning|execution|qa|validation|complete`), `started_at`, `completed_at`
 - `ultrawork`: `active`, `reinforcement_count`, `started_at`
 - `team`: `active`, `current_phase` (`team-plan|team-prd|team-exec|team-verify|team-fix|complete`), `agent_count`, `team_name`
-- `ecomode`: `active`
+
 </state_management>
 
 ---

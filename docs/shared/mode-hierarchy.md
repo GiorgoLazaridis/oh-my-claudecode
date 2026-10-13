@@ -10,10 +10,6 @@ autopilot (autonomous end-to-end)
 │   └── includes: ultrawork (parallelism)
 └── includes: plan (strategic thinking)
 
- (token efficiency ONLY)
-└── modifies: agent tier selection (prefer haiku/sonnet)
-    (does NOT include persistence - that's ralph's job)
-
 ralph (persistence wrapper)
 └── includes: ultrawork (parallelism engine)
     (adds: loop until done + architect verification)
@@ -30,7 +26,6 @@ ultrawork (parallelism engine)
 | autopilot | Standalone | ralph, plan | - |
 | ralph | Wrapper | ultrawork | - |
 | ultrawork | Component | - | - |
-|  | Modifier | - | - |
 
 ## Decision Tree
 
@@ -40,9 +35,9 @@ Want autonomous execution?
 │   ├── YES: team N:executor (parallel autonomous with file ownership)
 │   └── NO: autopilot (sequential with ralph phases)
 └── NO: Want parallel execution with manual oversight?
-    ├── YES: Do you want cost optimization?
-    │   ├── YES:  + ultrawork
-    │   └── NO: ultrawork alone
+    ├── YES: ultrawork (manual parallel execution)
+    │   (cost optimization: use OMC_RUN_BUDGET_TOKENS to limit spend)
+    └── NO: ultrawork
     └── NO: Want persistence until verified done?
         ├── YES: ralph (persistence + ultrawork + verification)
         └── NO: Standard orchestration (delegate to agents directly)
@@ -59,7 +54,6 @@ Have many similar independent tasks (e.g., "fix 47 errors")?
 | team | Multi-component/homogeneous | N workers | Per-task | Per-task | Per-task |
 | ralph | "Don't stop" | Via ultrawork | Yes | Mandatory | N/A |
 | ultrawork | Parallel only | Yes | No | No | N/A |
-|  | Cost savings | Modifier | No | No | N/A |
 
 ## Quick Reference
 
@@ -68,18 +62,17 @@ Have many similar independent tasks (e.g., "fix 47 errors")?
 **Fixing many similar issues?** → `team N:executor`
 **Want control over execution?** → `ultrawork`
 **Need verified completion?** → `ralph`
-**Want to save tokens?** → `` (combine with other modes)
+**Want to limit token spend?** → Set `OMC_RUN_BUDGET_TOKENS` environment variable
 
 ## Combining Modes
 
 Valid combinations:
-- `eco ralph` = Ralph loop with cheaper agents
-- `eco ultrawork` = Parallel execution with cheaper agents
-- `eco autopilot` = Full autonomous with cost optimization
+- `ralph ultrawork` = Ralph persistence loop with parallel execution
+- `team N:executor` = Coordinated parallel execution
 
 Invalid combinations:
 - `autopilot team` = Mutually exclusive (both are standalone)
-- `` alone = Not useful (needs an execution mode)
+- `ralph team` = Mutually exclusive (both are standalone)
 
 ## State Management
 
@@ -90,11 +83,10 @@ All mode state files use standardized locations:
 
 ### Mode State Files
 | Mode | State File |
-|------|-----------|
+|------|------------|
 | ralph | `ralph-state.json` |
 | autopilot | `autopilot-state.json` |
 | ultrawork | `ultrawork-state.json` |
-|  | `-state.json` |
 | pipeline | `pipeline-state.json` |
 
 **Important:** Never store OMC state in `~/.claude/` - that directory is reserved for Claude Code itself.

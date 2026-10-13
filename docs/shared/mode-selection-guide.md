@@ -7,9 +7,8 @@
 | Clarify vague requirements first                                      | `deep-interview`               | "deep interview", "ouroboros", "don't assume"  |
 | Full autonomous build from idea                                       | `autopilot`                    | "autopilot", "build me", "I want a"            |
 | Parallel autonomous (3-5x faster)                                     | `team` (replaces `ultrapilot`) | `/team N:executor "task"`                      |
-| Persistence until verified done                                       | `ralph`                        | "ralph", "don't stop"                          |
-| Parallel execution, manual oversight                                  | `ultrawork`                    | "ulw", "ultrawork"                             |
-| Cost-efficient execution                                              | `` (modifier)                  | "eco", "budget"                                |
+| Persistence until verified done                                       | `ralph`                        | "ralph", "don't stop"                         |
+| Parallel execution, manual oversight                                  | `ultrawork`                    | "ulw", "ultrawork"                            |
 | Many similar independent tasks                                        | `team` (replaces `swarm`)      | `/team N:executor "task"`                      |
 | Native Claude Code cross-turn loop with a single completion condition | Claude Code `/goal`            | `/goal "condition with proof"`                 |
 | Durable goal ledger without starting another loop                     | artifact-only Ultragoal        | Write goal artifacts/checkpoints/evidence only |
@@ -34,9 +33,7 @@ Want autonomous execution?
 │   ├── YES: team N:executor (parallel autonomous with file ownership)
 │   └── NO: autopilot (sequential with ralph phases)
 └── NO: Want parallel execution with manual oversight?
-    ├── YES: Do you want cost optimization?
-    │   ├── YES: eco + ultrawork
-    │   └── NO: ultrawork alone
+    ├── YES: ultrawork (with OMC_RUN_BUDGET_TOKENS for cost control)
     └── NO: Want persistence until verified done?
         ├── YES: ralph (persistence + ultrawork + verification)
         └── NO: Standard orchestration (delegate to agents directly)
@@ -88,7 +85,6 @@ When a goal-like request enters an OMC session:
 | "Fix all 47 TypeScript errors"          | team 5:executor | Many independent similar tasks  |
 | "Refactor auth module thoroughly"       | ralph           | Need persistence + verification |
 | "Quick parallel execution"              | ultrawork       | Manual oversight preferred      |
-| "Save tokens while fixing errors"       | + ultrawork     | Cost-conscious parallel         |
 | "Don't stop until done"                 | ralph           | Persistence keyword detected    |
 
 ## Mode Types
@@ -114,23 +110,18 @@ These are used by other modes:
 
 - **ultrawork**: Parallel execution engine (used by ralph, autopilot)
 
-### Modifier Modes
+## Cost Control
 
-These modify how other modes work:
+To limit token spending during execution, set the `OMC_RUN_BUDGET_TOKENS` environment variable:
 
-- \*\*\*\*: Changes model routing to prefer cheaper tiers
+```bash
+OMC_RUN_BUDGET_TOKENS=50000 ralph fix all errors
+```
 
-## Valid Combinations
-
-| Combination     | Effect                                 |
-| --------------- | -------------------------------------- |
-| `eco ralph`     | Ralph persistence with cheaper agents  |
-| `eco ultrawork` | Parallel execution with cheaper agents |
-| `eco autopilot` | Autonomous execution with cost savings |
+At 90% of budget, Ralph will finish the current story. At 100%, it stops with a resumable budget report.
 
 ## Invalid Combinations
 
 | Combination      | Why Invalid                       |
 | ---------------- | --------------------------------- |
 | `autopilot team` | Both are standalone - use one     |
-| `` alone         | Needs an execution mode to modify |
