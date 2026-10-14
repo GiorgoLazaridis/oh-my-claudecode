@@ -1,3 +1,25 @@
+# oh-my-claudecode v5.7.4: Improve hook context-injector scheduling
+
+## Release Notes
+
+Release with **1 performance improvement** across **1 merged PR**.
+
+### Highlights
+
+- **perf(#4373): Optimize hook context-injector launching for tool-specific operation** (#4373)
+
+### Changes
+
+- **perf(#4373): Optimize hook context-injector launching for tool-specific operation** (#4373)
+  - File-context injectors now launch only for the tools they act on
+  - Reduces hook overhead in workflows that use multiple tools with different context requirements
+
+### Stats
+
+- **1 PR merged** | **0 new features** | **0 bug fixes** | **1 performance improvement** | **0 CI improvements**
+
+---
+
 # oh-my-claudecode v5.7.3: Retire agent variant names, parallel consensus reviews
 
 ## Release Notes

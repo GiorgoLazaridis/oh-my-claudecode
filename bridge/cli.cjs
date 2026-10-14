@@ -117814,7 +117814,7 @@ function buildHookRegistry(hooksJson) {
 }
 function selectApplicableEntries(registry2, event, matcherInput) {
   return registry2.filter(
-    (e) => e.event === event && (e.matcher === "*" || e.matcher === matcherInput)
+    (e) => e.event === event && (e.matcher === "*" || matcherInput !== void 0 && e.matcher.split("|").includes(matcherInput))
   ).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 
