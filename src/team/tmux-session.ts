@@ -3602,9 +3602,9 @@ export async function deliverStartupInbox(
       context.ownership.tmuxServerIdentity,
     );
     await sleep(100);
-    await sendTeamPaneKey(context.ownership.paneId, 'C-m', context.ownership.tmuxServerIdentity);
+    await sendTeamPaneKey(context.ownership.paneId, 'Enter', context.ownership.tmuxServerIdentity);
     await sleep(120);
-    await sendTeamPaneKey(context.ownership.paneId, 'C-m', context.ownership.tmuxServerIdentity);
+    await sendTeamPaneKey(context.ownership.paneId, 'Enter', context.ownership.tmuxServerIdentity);
     return { ok: true, kind: 'attempted_unconfirmed' };
   } catch (error) {
     logWorkerSpawnDiagnostic(
