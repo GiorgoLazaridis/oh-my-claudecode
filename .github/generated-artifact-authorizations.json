@@ -4,6 +4,188 @@
   "owner": "Yeachan-Heo",
   "authorizations": [
     {
+      "pullNumber": 4366,
+      "targetRef": "main",
+      "mergeBaseSha": "43b26249006b760effad8598b70b8ca853ecd45a",
+      "headSha": "5c52133ed0001630c56b986fe0cfc39ddd96e428",
+      "owner": "Yeachan-Heo",
+      "expiresAt": "2026-11-14T00:00:00.000Z",
+      "generatedDelta": {
+        "count": 28,
+        "sha256": "98382c881a71d364ad327f2b401800eef7a8954a22545eda8b2bf8672a1fddef"
+      },
+      "generatedFiles": [
+        {
+          "status": "modified",
+          "filename": "bridge/claude-md-coordinator.cjs",
+          "sha": "1106a698e417ca51a48da337082ba276b87d4bc2",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "bridge/cli.cjs",
+          "sha": "f539d92aefe60972e9696a09b35059efc552d601",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/consensus-execution-handoff.test.js",
+          "sha": "674a90726cc7f202924f396ad24042aa56e927a7",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/consensus-execution-handoff.test.js.map",
+          "sha": "b905c2e4925bc32a095c25e4790774ac605dafdc",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/delegation-enforcement-levels.test.js",
+          "sha": "e3fecb40b7db4fa63c74c69424e5d37e44fa59f2",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/delegation-enforcement-levels.test.js.map",
+          "sha": "1b632a579f2d4517ca90f0c32af376471ac74725",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/delegation-enforcer-integration.test.js",
+          "sha": "6364344e32e893b20cf003d5eeace9c62c0bb940",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/delegation-enforcer-integration.test.js.map",
+          "sha": "d670d88ecc9d32ae85f1cc4cedb6843704b91d3c",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/load-agent-prompt.test.js",
+          "sha": "f3906dc1dad1a83b84ee1e3267e683adcb0efca2",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/load-agent-prompt.test.js.map",
+          "sha": "312033f570f656be0fbb4dd20c4e8e0a83a526b6",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/prompt-injection.test.js",
+          "sha": "137165fec8a731ffae070fe606ad35b7436c2f53",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/__tests__/prompt-injection.test.js.map",
+          "sha": "28cc0fe7b959d1037859b1e6209949b2925d683b",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/cli/index.d.ts.map",
+          "sha": "af251804ba00ca70617e2e7c0bd0657a705cbcf1",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/cli/index.js",
+          "sha": "9478ac3d1c2222612ec71a0bb803ead28844d82b",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/cli/index.js.map",
+          "sha": "e3ff97219e67b01fe35e72fbb878e5914cec6cf9",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/hooks/autopilot/prompts.js",
+          "sha": "560292b8b22b94d635a3d6194661a8ec367e673d",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/hooks/omc-orchestrator/index.js",
+          "sha": "d8374c57b4806a5373a4d1948947c045c86bd5b7",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/hooks/omc-orchestrator/index.js.map",
+          "sha": "b0cdd4c1a738533c49be1971a17e34b57b90bdee",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/tools/python-repl/__tests__/sandbox-guidance-parity.test.js",
+          "sha": "25a7777f090d230e77307dcfb8b43fc5c25199e7",
+          "previousFilename": null
+        },
+        {
+          "status": "modified",
+          "filename": "dist/tools/python-repl/__tests__/sandbox-guidance-parity.test.js.map",
+          "sha": "0a4736ae626d5c45b5aff3c71ddcece337f1692f",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.d.ts",
+          "sha": "2b03a7f9ccda8a91e4aeacad8ad0e76a682dfe64",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.d.ts.map",
+          "sha": "8079293310fdf94f972c9bb3b2567f82b670e726",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.js",
+          "sha": "7e9e0627d060238fd05acc9ba12bc1fb526d318b",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.js.map",
+          "sha": "ccd41c009cd6407665eda9775431e7a1bce7db60",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.test.d.ts",
+          "sha": "e33379e1f5a1b29c8bd26c03ed5b05c2f4317ba5",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.test.d.ts.map",
+          "sha": "3dcc137533c972b83ad58ef4b34b250594cdafa3",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.test.js",
+          "sha": "5c48cec0c3c17a56043b96a8f743082347a36d0f",
+          "previousFilename": null
+        },
+        {
+          "status": "removed",
+          "filename": "dist/verification/tier-selector.test.js.map",
+          "sha": "04f22f9ef046ee8fb1b81bde9a32e044b383a1f2",
+          "previousFilename": null
+        }
+      ]
+    },
+    {
       "pullNumber": 3537,
       "targetRef": "main",
       "mergeBaseSha": "76c90920b74494df6e34d6165be963bca8a9adf6",
