@@ -82,7 +82,21 @@ export function writeStdinCache(stdin: StatuslineStdin): void {
     if (!existsSync(cacheDir)) {
       mkdirSync(cacheDir, { recursive: true });
     }
-    writeFileSync(cachePath, JSON.stringify(stdin));
+    // Only write if content has changed to avoid constant rewrites on every HUD render.
+    // Issue #4372: skip writes when cached content is unchanged.
+    const newContent = JSON.stringify(stdin);
+    if (existsSync(cachePath)) {
+      try {
+        const existingContent = readFileSync(cachePath, 'utf-8');
+        if (existingContent === newContent) {
+          // Content is unchanged; skip the write to avoid touching the mtime.
+          return;
+        }
+      } catch {
+        // If we can't read the existing file, fall through and write anyway.
+      }
+    }
+    writeFileSync(cachePath, newContent);
   } catch {
     // Best-effort; ignore failures
   }

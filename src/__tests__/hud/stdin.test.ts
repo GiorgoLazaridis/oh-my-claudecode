@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execSync } from 'child_process';
@@ -547,6 +547,38 @@ describe('HUD stdin cache path is session-scoped', () => {
     expect(existsSync(legacy)).toBe(true);
     const sessionsDir = join(tmpRoot, '.omc', 'state', 'sessions');
     expect(existsSync(sessionsDir)).toBe(false);
+  });
+
+  it('does not rewrite the cache file when content is unchanged', () => {
+    // Regression: HUD rewrites .omc/state/hud-stdin-cache.json on every render,
+    // causing the file mtime to change and leaking into agent context as a diff.
+    // Issue #4372: skip writes when the cached content is unchanged.
+    process.env.CLAUDE_SESSION_ID = 'test-session';
+    const stdin = makeStdin({ cwd: tmpRoot, transcript_path: `${tmpRoot}/session.jsonl` });
+    const cachePath = join(tmpRoot, '.omc', 'state', 'sessions', 'test-session', 'hud-stdin-cache.json');
+
+    // First write
+    writeStdinCache(stdin);
+    expect(existsSync(cachePath)).toBe(true);
+    const firstMtime = statSync(cachePath).mtimeMs;
+    const firstContent = readFileSync(cachePath, 'utf-8');
+
+    // Ensure measurable time passes
+    const delay = 10; // milliseconds
+    const start = Date.now();
+    while (Date.now() - start < delay) {
+      // Busy wait to ensure time advances
+    }
+
+    // Second write with the same content
+    writeStdinCache(stdin);
+    const secondMtime = statSync(cachePath).mtimeMs;
+    const secondContent = readFileSync(cachePath, 'utf-8');
+
+    // Content should be identical
+    expect(secondContent).toBe(firstContent);
+    // File mtime should NOT have changed (content was not rewritten)
+    expect(secondMtime).toBe(firstMtime);
   });
 });
 
