@@ -5,15 +5,15 @@
   "provenance": {
     "base": "05c800f40d1ad53b42a78609d2667ef4f726808b",
     "planningHead": "0a91273e61dbbd47eb0af4c02844409251e08398",
-    "head": "ed44201fe20cdfe1be7506613d813dddcbc80133",
-    "sourceSha256": "d72bddd1c09c1c3337b52258d70ff175cf2c7a04fae6c1ef1f3395c475051542",
+    "head": "10155e97e1e7f4560e151da51f462b3e9304bf02",
+    "sourceSha256": "59c2aa8d62bc99dfed7dfcbe05550d5ca2787adb9411dff2d8f4e319b56723d8",
     "generatedAt": null,
     "generator": "scripts/generate-inventory-graph.mjs"
   },
   "base": "05c800f40d1ad53b42a78609d2667ef4f726808b",
   "planningHead": "0a91273e61dbbd47eb0af4c02844409251e08398",
-  "head": "ed44201fe20cdfe1be7506613d813dddcbc80133",
-  "sourceSha256": "d72bddd1c09c1c3337b52258d70ff175cf2c7a04fae6c1ef1f3395c475051542",
+  "head": "10155e97e1e7f4560e151da51f462b3e9304bf02",
+  "sourceSha256": "59c2aa8d62bc99dfed7dfcbe05550d5ca2787adb9411dff2d8f4e319b56723d8",
   "counts": {
     "public": {
       "skills": 48,
@@ -845,6 +845,7 @@
       "scripts/lib/pre-tool-enforcer-preflight.mjs",
       "scripts/lib/precompact-publisher.mjs",
       "scripts/lib/precompact-restore.mjs",
+      "scripts/lib/ralph-startup.mjs",
       "scripts/lib/read-budget-preflight.mjs",
       "scripts/lib/run-reaper.mjs",
       "scripts/lib/skill-entitlements.mjs",
@@ -37192,6 +37193,11 @@
         "path": "scripts/lib/precompact-restore.mjs"
       },
       {
+        "id": "scripts/lib/ralph-startup.mjs",
+        "kind": "script",
+        "path": "scripts/lib/ralph-startup.mjs"
+      },
+      {
         "id": "scripts/lib/read-budget-preflight.mjs",
         "kind": "script",
         "path": "scripts/lib/read-budget-preflight.mjs"
@@ -45597,6 +45603,11 @@
         "path": "tests/integration/issue-4266-jev-temp-cleanup.test.ts"
       },
       {
+        "id": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "kind": "other",
+        "path": "tests/integration/issue-4363-ralph-skill-start.test.ts"
+      },
+      {
         "id": "tests/integration/jev-active-mode-repro.test.ts",
         "kind": "other",
         "path": "tests/integration/jev-active-mode-repro.test.ts"
@@ -46885,6 +46896,11 @@
       },
       {
         "from": "scripts/keyword-detector.mjs",
+        "to": "scripts/lib/ralph-startup.mjs",
+        "kind": "imports"
+      },
+      {
+        "from": "scripts/keyword-detector.mjs",
         "to": "scripts/lib/state-root.mjs",
         "kind": "imports"
       },
@@ -47096,6 +47112,21 @@
       {
         "from": "scripts/lib/precompact-restore.mjs",
         "to": "external:url",
+        "kind": "imports"
+      },
+      {
+        "from": "scripts/lib/ralph-startup.mjs",
+        "to": "external:child_process",
+        "kind": "imports"
+      },
+      {
+        "from": "scripts/lib/ralph-startup.mjs",
+        "to": "external:fs",
+        "kind": "imports"
+      },
+      {
+        "from": "scripts/lib/ralph-startup.mjs",
+        "to": "external:path",
         "kind": "imports"
       },
       {
@@ -47566,6 +47597,11 @@
       {
         "from": "scripts/post-tool-verifier.mjs",
         "to": "scripts/lib/jev-shadow.mjs",
+        "kind": "imports"
+      },
+      {
+        "from": "scripts/post-tool-verifier.mjs",
+        "to": "scripts/lib/ralph-startup.mjs",
         "kind": "imports"
       },
       {
@@ -87469,6 +87505,41 @@
         "kind": "imports"
       },
       {
+        "from": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "to": "external:child_process",
+        "kind": "imports"
+      },
+      {
+        "from": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "to": "external:node:crypto",
+        "kind": "imports"
+      },
+      {
+        "from": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "to": "external:node:fs",
+        "kind": "imports"
+      },
+      {
+        "from": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "to": "external:node:os",
+        "kind": "imports"
+      },
+      {
+        "from": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "to": "external:node:path",
+        "kind": "imports"
+      },
+      {
+        "from": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "to": "external:vitest",
+        "kind": "imports"
+      },
+      {
+        "from": "tests/integration/issue-4363-ralph-skill-start.test.ts",
+        "to": "src/installer/index.ts",
+        "kind": "imports"
+      },
+      {
         "from": "tests/integration/jev-active-mode-repro.test.ts",
         "to": "external:node:child_process",
         "kind": "imports"
@@ -88275,12 +88346,12 @@
       }
     ],
     "stats": {
-      "nodeCount": 7735,
-      "edgeCount": 8497,
-      "importEdgeCount": 7052,
+      "nodeCount": 7737,
+      "edgeCount": 8509,
+      "importEdgeCount": 7064,
       "registerEdgeCount": 69
     }
   },
-  "inventorySha256": "4f6b88fef2883b362eea04c3c12e5c5ba026ca0a4b8d013df8789a30e3276653",
-  "manifestSha256": "d4b65bb0ab6e537ced56a16c58f7dbe143c641555276b0b6c53bc5508ea9fe9c"
+  "inventorySha256": "d11a3ba23d8ffd964115b1f162f7d2e98bcce5564b14699355479249007ebecd",
+  "manifestSha256": "db720a42fed5cb8b47912e74b732476946287edb43b282968a7c827b26b2df90"
 }
